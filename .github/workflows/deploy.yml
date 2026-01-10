@@ -1,8 +1,9 @@
-name: Environment Secret Test
+name: Deploy TradePro (Frontend & Backend)
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   deploy:
@@ -10,11 +11,56 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Verify EC2_HOST
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Detect changed services
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'backend/**'
+
+      - name: Set version
         run: |
-          if [ -z "${{ secrets.EC2_HOST }}" ]; then
-            echo "❌ EC2_HOST is empty"
-            exit 1
-          else
-            echo "✅ EC2_HOST is available"
-          fi
+          echo "VERSION=v0.${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/neotrade-test
+
+            echo "🚀 Deploying version $VERSION"
+
+            if [ "${{ steps.changes.outputs.backend }}" = "true" ]; then
+              echo "🔁 Backend changed"
+              docker stop backend || true
+              docker rm backend || true
+              docker build -t tradepro-backend:$VERSION backend
+              docker tag tradepro-backend:$VERSION tradepro-backend:latest
+              docker run -d --name backend -p 5000:5000 tradepro-backend:latest
+            else
+              echo "⏭️ Backend unchanged"
+            fi
+
+            if [ "${{ steps.changes.outputs.frontend }}" = "true" ]; then
+              echo "🔁 Frontend changed"
+              docker stop frontend || true
+              docker rm frontend || true
+              docker build -t tradepro-frontend:$VERSION frontend
+              docker tag tradepro-frontend:$VERSION tradepro-frontend:latest
+              docker run -d --name frontend -p 8080:80 tradepro-frontend:latest
+            else
+              echo "⏭️ Frontend unchanged"
+            fi
+
+            echo "📦 Running containers:"
+            docker ps
