@@ -3,7 +3,7 @@ name: Deploy TradePro (Frontend & Backend)
 on:
   push:
     branches:
-      - main
+      - disabled
 
 jobs:
   deploy:
