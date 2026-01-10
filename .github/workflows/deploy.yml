@@ -1,35 +1,20 @@
-name: Deploy to EC2
+name: Environment Secret Test
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
+    environment: Tradepro_dev
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Print secret presence (debug)
+      - name: Verify EC2_HOST
         run: |
           if [ -z "${{ secrets.EC2_HOST }}" ]; then
             echo "❌ EC2_HOST is empty"
             exit 1
           else
-            echo "✅ EC2_HOST is set"
+            echo "✅ EC2_HOST is available"
           fi
-
-      - name: SSH into EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            echo "✅ Connected to EC2"
-            hostname
-            whoami
-            docker ps || true
