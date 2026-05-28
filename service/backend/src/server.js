@@ -39,6 +39,15 @@ try {
   process.exit(1);
 }
 
+try {
+  const signalsRoutes = require('./routes/signals.routes');
+  app.use('/api/signals', signalsRoutes);
+  console.log('Signals routes loaded');
+} catch (err) {
+  console.error('Failed to load signals routes:', err.message);
+  // Non-fatal: server continues without signal ingestion
+}
+
 /* =========================
    Health Check
 ========================= */
