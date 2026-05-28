@@ -292,4 +292,32 @@ async function receiveChartink(req, res) {
   }
 }
 
-module.exports = { receiveTradingView, receiveChartink };
+// ---------------------------------------------------------------------------
+// Handler: GET /api/signals/portfolio/:strategyId
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the paper portfolio summary for a given strategyId.
+ * Returns 404 if no portfolio has been initialised for that strategyId yet.
+ */
+async function getPortfolio(req, res) {
+  try {
+    const { strategyId } = req.params;
+    if (!strategyId) {
+      return res.status(400).json({ error: 'strategyId param required' });
+    }
+    const portfolio = _portfolios.get(strategyId);
+    if (!portfolio) {
+      return res.status(404).json({
+        error: 'No portfolio found for strategyId: ' + strategyId + '. Has any signal been received for this strategy?',
+      });
+    }
+    const summary = portfolio.getSummary(marketDataService.lastPrice);
+    return res.status(200).json({ strategyId, ...summary });
+  } catch (err) {
+    console.error('[SignalsController] getPortfolio error:', err.message);
+    return res.status(500).json({ error: 'Internal error', message: err.message });
+  }
+}
+
+module.exports = { receiveTradingView, receiveChartink, getPortfolio };

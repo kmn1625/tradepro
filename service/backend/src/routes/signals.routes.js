@@ -13,4 +13,7 @@ router.post('/tradingview', (req, res) => signalsController.receiveTradingView(r
 // No auth — Chartink does not send auth headers; signals are logged only (no execution)
 router.post('/chartink', (req, res) => signalsController.receiveChartink(req, res));
 
+// GET /api/signals/portfolio/:strategyId — return paper portfolio state
+router.get('/portfolio/:strategyId', signalsController.getPortfolio.bind(signalsController));
+
 module.exports = router;
