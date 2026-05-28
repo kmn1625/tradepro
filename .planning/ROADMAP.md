@@ -24,7 +24,7 @@
 
 | Phase | Name | Duration | Cost | Status |
 |-------|------|----------|------|--------|
-| 1 | Foundation + Signals Bridge | 2-4 weeks | ₹0 | Ready to plan |
+| 1 | Foundation + Signals Bridge | 2-4 weeks | ₹0 | In Progress (4/8 plans done) |
 | 2 | ClickTrade Strategy Builder | 6-10 weeks | ₹0 | After Phase 1 |
 | 3 | Signals AI Condition Builder | 3-4 weeks | ~$10/mo OpenAI | After Phase 2 |
 | 4 | Historical Data Pipeline | 6-8 weeks | ₹0 (Angel One free) | After Phase 3 |
