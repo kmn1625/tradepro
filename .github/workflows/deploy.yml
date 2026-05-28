@@ -1,9 +1,12 @@
 name: Deploy TradePro (Frontend & Backend)
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy target (ec2-dev / ec2-prod)'
+        required: true
+        default: 'ec2-dev'
 
 jobs:
   deploy:
