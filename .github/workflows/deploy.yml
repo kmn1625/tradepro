@@ -3,7 +3,7 @@ name: Deploy TradePro (Frontend & Backend)
 on:
   push:
     branches:
-      - disabled
+      - main
 
 jobs:
   deploy:
@@ -20,13 +20,12 @@ jobs:
         with:
           filters: |
             frontend:
-              - 'frontend/**'
+              - 'service/frontend/**'
             backend:
-              - 'backend/**'
+              - 'service/backend/**'
 
       - name: Set version
-        run: |
-          echo "VERSION=v0.${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
+        run: echo "VERSION=v0.${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
 
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -36,31 +35,27 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            cd ~/neotrade-test
+            cd ~/neotrade
 
-            echo "🚀 Deploying version $VERSION"
+            echo "Deploying version $VERSION"
 
             if [ "${{ steps.changes.outputs.backend }}" = "true" ]; then
-              echo "🔁 Backend changed"
+              echo "Backend changed — rebuilding"
               docker stop backend || true
               docker rm backend || true
-              docker build -t tradepro-backend:$VERSION backend
+              docker build -t tradepro-backend:$VERSION service/backend
               docker tag tradepro-backend:$VERSION tradepro-backend:latest
-              docker run -d --name backend -p 5000:5000 tradepro-backend:latest
-            else
-              echo "⏭️ Backend unchanged"
+              docker run -d --name backend --env-file .env -p 5000:5000 tradepro-backend:latest
             fi
 
             if [ "${{ steps.changes.outputs.frontend }}" = "true" ]; then
-              echo "🔁 Frontend changed"
+              echo "Frontend changed — rebuilding"
               docker stop frontend || true
               docker rm frontend || true
-              docker build -t tradepro-frontend:$VERSION frontend
+              docker build -t tradepro-frontend:$VERSION service/frontend
               docker tag tradepro-frontend:$VERSION tradepro-frontend:latest
               docker run -d --name frontend -p 8080:80 tradepro-frontend:latest
-            else
-              echo "⏭️ Frontend unchanged"
             fi
 
-            echo "📦 Running containers:"
+            echo "Running containers:"
             docker ps
