@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.local
+.session.json
+dist/
+.DS_Store
+*.log
+*.err
+.planning/phases/**/*-SUMMARY.md
+.planning/phases/**/*-STATE.md

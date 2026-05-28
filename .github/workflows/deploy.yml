@@ -1,0 +1,61 @@
+name: Deploy TradePro (Frontend & Backend)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    environment: Tradepro_dev
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Detect changed services
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - 'service/frontend/**'
+            backend:
+              - 'service/backend/**'
+
+      - name: Set version
+        run: echo "VERSION=v0.${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/neotrade
+
+            echo "Deploying version $VERSION"
+
+            if [ "${{ steps.changes.outputs.backend }}" = "true" ]; then
+              echo "Backend changed — rebuilding"
+              docker stop backend || true
+              docker rm backend || true
+              docker build -t tradepro-backend:$VERSION service/backend
+              docker tag tradepro-backend:$VERSION tradepro-backend:latest
+              docker run -d --name backend --env-file .env -p 5000:5000 tradepro-backend:latest
+            fi
+
+            if [ "${{ steps.changes.outputs.frontend }}" = "true" ]; then
+              echo "Frontend changed — rebuilding"
+              docker stop frontend || true
+              docker rm frontend || true
+              docker build -t tradepro-frontend:$VERSION service/frontend
+              docker tag tradepro-frontend:$VERSION tradepro-frontend:latest
+              docker run -d --name frontend -p 8080:80 tradepro-frontend:latest
+            fi
+
+            echo "Running containers:"
+            docker ps
