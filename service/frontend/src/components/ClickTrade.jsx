@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Plus, Trash2, Zap } from 'lucide-react';
+import * as greeks from 'greeks';
 import OptionChain from './OptionChain';
 import PayoffGraph from './PayoffGraph';
 
@@ -7,6 +8,35 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 const UNDERLYINGS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
 const LOT_SIZES   = { NIFTY: 50, BANKNIFTY: 15, FINNIFTY: 40 };
+const RF_RATE     = 0.065; // 6.5% risk-free rate
+
+// Returns nearest weekly expiry (Thursday 15:30 IST) as fraction of year from now
+const getDTE = () => {
+  const now  = new Date();
+  const day  = now.getDay();
+  const daysToThursday = day <= 4 ? (4 - day) : (4 - day + 7);
+  const expiry = new Date(now);
+  expiry.setDate(now.getDate() + (daysToThursday === 0 ? 7 : daysToThursday));
+  expiry.setHours(15, 30, 0, 0);
+  return Math.max((expiry - now) / (365 * 24 * 60 * 60 * 1000), 1 / 365);
+};
+
+const calcLegGreeks = (leg, spot) => {
+  const t   = getDTE();
+  const iv  = (leg.iv || 15) / 100;
+  const dir = leg.side === 'BUY' ? 1 : -1;
+  const cp  = leg.type === 'CE' ? 'call' : 'put';
+  try {
+    return {
+      delta: dir * greeks.getDelta(spot, leg.strike, t, iv, RF_RATE, cp),
+      theta: dir * greeks.getTheta(spot, leg.strike, t, iv, RF_RATE, cp),
+      gamma: dir * greeks.getGamma(spot, leg.strike, t, iv, RF_RATE, cp),
+      vega:  dir * greeks.getVega(spot, leg.strike, t, iv, RF_RATE, cp) * 0.01,
+    };
+  } catch {
+    return { delta: 0, theta: 0, gamma: 0, vega: 0 };
+  }
+};
 
 // ClickTrade — visual multi-leg options strategy builder.
 // Build legs from option chain clicks or manual input.
@@ -14,6 +44,7 @@ const LOT_SIZES   = { NIFTY: 50, BANKNIFTY: 15, FINNIFTY: 40 };
 const ClickTrade = () => {
   const [underlying, setUnderlying]   = useState('NIFTY');
   const [legs, setLegs]               = useState([]);
+  const [spot, setSpot]               = useState(22500);
   const [executing, setExecuting]     = useState(false);
   const [execResult, setExecResult]   = useState(null);
 
@@ -80,7 +111,7 @@ const ClickTrade = () => {
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Option chain */}
-        <OptionChain symbol={underlying} onLegSelect={addLeg} />
+        <OptionChain symbol={underlying} onLegSelect={addLeg} onSpotLoad={setSpot} />
 
         {/* Leg builder + controls */}
         <div className="space-y-4">
@@ -158,8 +189,78 @@ const ClickTrade = () => {
         </div>
       </div>
 
+      {/* Greeks table */}
+      {legs.length > 0 && <GreeksTable legs={legs} spot={spot} lotSize={lotSize} />}
+
       {/* Payoff graph */}
       <PayoffGraph legs={legs} lotSize={lotSize} />
+    </div>
+  );
+};
+
+const fmt = (v, d = 2) => {
+  if (isNaN(v) || !isFinite(v)) return '—';
+  return (v >= 0 ? '+' : '') + v.toFixed(d);
+};
+const fmtColor = v => isNaN(v) || !isFinite(v) ? 'text-slate-400' : v >= 0 ? 'text-emerald-600' : 'text-rose-600';
+
+const GreeksTable = ({ legs, spot, lotSize }) => {
+  const rows = useMemo(() => legs.map(leg => {
+    const g = calcLegGreeks(leg, spot);
+    const n = leg.lots * lotSize;
+    return {
+      label: `${leg.side} ${leg.type} ${leg.strike}`,
+      delta: g.delta * n,
+      theta: g.theta * n,
+      gamma: g.gamma * n,
+      vega:  g.vega  * n,
+    };
+  }), [legs, spot, lotSize]);
+
+  const net = rows.reduce(
+    (acc, r) => ({ delta: acc.delta + r.delta, theta: acc.theta + r.theta, gamma: acc.gamma + r.gamma, vega: acc.vega + r.vega }),
+    { delta: 0, theta: 0, gamma: 0, vega: 0 }
+  );
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="p-4 border-b border-slate-100 flex items-center gap-3">
+        <span className="font-black text-slate-800 text-sm">Position Greeks</span>
+        <span className="text-[10px] text-slate-400 font-mono">spot ₹{spot.toLocaleString('en-IN')} · nearest expiry · rf 6.5%</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-50 text-slate-400 font-black uppercase tracking-widest">
+            <tr>
+              <th className="px-5 py-3 text-left">Leg</th>
+              <th className="px-5 py-3 text-right">Δ Delta</th>
+              <th className="px-5 py-3 text-right">θ Theta/day</th>
+              <th className="px-5 py-3 text-right">Γ Gamma</th>
+              <th className="px-5 py-3 text-right">ν Vega/1%IV</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {rows.map((r, i) => (
+              <tr key={i} className="hover:bg-slate-50">
+                <td className="px-5 py-3 font-mono font-bold text-slate-700">{r.label}</td>
+                <td className={`px-5 py-3 text-right font-mono font-bold ${fmtColor(r.delta)}`}>{fmt(r.delta, 4)}</td>
+                <td className={`px-5 py-3 text-right font-mono font-bold ${fmtColor(r.theta)}`}>₹{fmt(r.theta, 0)}</td>
+                <td className={`px-5 py-3 text-right font-mono font-bold ${fmtColor(r.gamma)}`}>{fmt(r.gamma, 6)}</td>
+                <td className={`px-5 py-3 text-right font-mono font-bold ${fmtColor(r.vega)}`}>₹{fmt(r.vega, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="bg-indigo-50 border-t-2 border-indigo-100">
+              <td className="px-5 py-3 font-black text-indigo-700 text-xs uppercase">Net Position</td>
+              <td className={`px-5 py-3 text-right font-black font-mono text-sm ${fmtColor(net.delta)}`}>{fmt(net.delta, 4)}</td>
+              <td className={`px-5 py-3 text-right font-black font-mono text-sm ${fmtColor(net.theta)}`}>₹{fmt(net.theta, 0)}</td>
+              <td className={`px-5 py-3 text-right font-black font-mono text-sm ${fmtColor(net.gamma)}`}>{fmt(net.gamma, 6)}</td>
+              <td className={`px-5 py-3 text-right font-black font-mono text-sm ${fmtColor(net.vega)}`}>₹{fmt(net.vega, 2)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
   );
 };

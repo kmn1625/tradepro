@@ -5,7 +5,7 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 // Displays live option chain (CE + PE) for a given symbol and expiry.
 // Data from GET /api/options/chain?symbol=&expiry=
-const OptionChain = ({ symbol = 'NIFTY', expiry, onLegSelect }) => {
+const OptionChain = ({ symbol = 'NIFTY', expiry, onLegSelect, onSpotLoad }) => {
   const [chain, setChain] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -17,7 +17,9 @@ const OptionChain = ({ symbol = 'NIFTY', expiry, onLegSelect }) => {
       const params = new URLSearchParams({ symbol, ...(expiry ? { expiry } : {}) });
       const res = await fetch(`${API_BASE}/api/options/chain?${params}`);
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      setChain(await res.json());
+      const data = await res.json();
+      setChain(data);
+      if (data.spot) onSpotLoad?.(data.spot);
     } catch (err) {
       setError(err.message);
     } finally {
