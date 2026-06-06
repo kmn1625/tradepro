@@ -110,21 +110,29 @@ async function receiveTradingView(req, res) {
     const quantity = parseInt(rawQty, 10) > 0 ? parseInt(rawQty, 10) : 50;
 
     // --- Strategy lookup (auth gate) ---
-    const strategy = await _lookupStrategy(token);
+    // Dev bypass: when Firestore not configured, treat token as strategyId directly.
+    // Allows paper trading without a Firebase project (enter any string as token).
+    let strategy = await _lookupStrategy(token);
     if (!strategy) {
-      await _logSignal({
-        source: 'tradingview',
-        token,
-        strategyId: null,
-        symbol,
-        action,
-        quantity,
-        status: 'rejected',
-        fillPrice: null,
-        errorMessage: 'Token not found or strategy inactive',
-        mode: 'unknown',
-      });
-      return res.status(401).json({ error: 'Invalid webhook token or strategy not active' });
+      const db = getFirestore();
+      if (db) {
+        // Firestore IS configured but token not found — reject properly
+        await _logSignal({
+          source: 'tradingview',
+          token,
+          strategyId: null,
+          symbol,
+          action,
+          quantity,
+          status: 'rejected',
+          fillPrice: null,
+          errorMessage: 'Token not found or strategy inactive',
+          mode: 'unknown',
+        });
+        return res.status(401).json({ error: 'Invalid webhook token or strategy not active' });
+      }
+      // No Firestore — dev mode: use token as strategyId, default to paper
+      strategy = { id: token, strategyName: token, mode: 'paper', initialCapital: 1000000, slippage: 0.001 };
     }
 
     // --- Live mode stub (Phase 1 — no real orders allowed) ---
@@ -306,12 +314,9 @@ async function getPortfolio(req, res) {
     if (!strategyId) {
       return res.status(400).json({ error: 'strategyId param required' });
     }
-    const portfolio = _portfolios.get(strategyId);
-    if (!portfolio) {
-      return res.status(404).json({
-        error: 'No portfolio found for strategyId: ' + strategyId + '. Has any signal been received for this strategy?',
-      });
-    }
+    // Auto-create portfolio on first GET so users see the UI immediately.
+    // No signal needed to bootstrap — they can send test webhooks after.
+    const portfolio = _getOrCreatePortfolio(strategyId);
     const summary = portfolio.getSummary(marketDataService.lastPrice);
     return res.status(200).json({ strategyId, ...summary });
   } catch (err) {

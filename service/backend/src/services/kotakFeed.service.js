@@ -70,11 +70,14 @@ class KotakFeedService {
       'CRUDEOIL (MCX)':     6450.00,
     };
     this._mockInterval = setInterval(() => {
+      const now = Date.now();
       for (const [symbol, basePrice] of Object.entries(mockPrices)) {
         // Random walk: ±0.08% per tick
         const delta = basePrice * (Math.random() - 0.5) * 0.0016;
         mockPrices[symbol] = parseFloat((mockPrices[symbol] + delta).toFixed(2));
-        this._broadcastFn({ type: 'PRICE_UPDATE', symbol, price: mockPrices[symbol], time: Date.now() });
+        // Update marketDataService so lastPrice is available for paper trading fills
+        marketDataService.processTick(symbol, mockPrices[symbol], now);
+        this._broadcastFn({ type: 'PRICE_UPDATE', symbol, price: mockPrices[symbol], time: now });
       }
     }, 1000);
   }
