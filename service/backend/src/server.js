@@ -45,7 +45,30 @@ try {
   console.log('Signals routes loaded');
 } catch (err) {
   console.error('Failed to load signals routes:', err.message);
-  // Non-fatal: server continues without signal ingestion
+}
+
+try {
+  const optionsRoutes = require('./routes/options.routes');
+  app.use('/api/options', optionsRoutes);
+  console.log('Options routes loaded');
+} catch (err) {
+  console.error('Failed to load options routes:', err.message);
+}
+
+try {
+  const backtestRoutes = require('./routes/backtest.routes');
+  app.use('/api/backtest', backtestRoutes);
+  console.log('Backtest routes loaded');
+} catch (err) {
+  console.error('Failed to load backtest routes:', err.message);
+}
+
+try {
+  const aiRoutes = require('./routes/ai.routes');
+  app.use('/api/ai', aiRoutes);
+  console.log('AI routes loaded');
+} catch (err) {
+  console.error('Failed to load AI routes:', err.message);
 }
 
 /* =========================

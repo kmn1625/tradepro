@@ -3,6 +3,9 @@ import LivePrice from "./components/LivePrice";
 import CandleChart from "./components/CandleChart";
 import PaperTrading from "./components/PaperTrading";
 import SignalLog from "./components/SignalLog";
+import ClickTrade from "./components/ClickTrade";
+import BacktestRunner from "./components/BacktestRunner";
+import AlgoScripts from "./components/AlgoScripts";
 import {
   TrendingUp,
   LayoutDashboard,
@@ -19,7 +22,10 @@ import {
   Lock,
   Unlock,
   Activity,
-  BookOpen
+  BookOpen,
+  Layers,
+  FlaskConical,
+  Bot
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
@@ -197,12 +203,15 @@ const App = () => {
 
         <div className="flex-1 space-y-2 px-3">
           {[
-            { id: 'terminal', icon: LayoutDashboard, label: 'Execution Terminal' },
-            { id: 'portfolio', icon: Briefcase, label: 'Rule Positions' },
-            { id: 'orders', icon: History, label: 'Order History' },
-            { id: 'analytics', icon: PieChart, label: 'Market Sentiment' },
-            { id: 'paper', icon: Activity, label: 'Paper Trading' },
-            { id: 'signals', icon: BookOpen, label: 'Signal Log' },
+            { id: 'terminal',  icon: LayoutDashboard, label: 'Execution Terminal' },
+            { id: 'clicktrade',icon: Layers,          label: 'ClickTrade' },
+            { id: 'algo',      icon: Bot,             label: 'Algo Scripts' },
+            { id: 'backtest',  icon: FlaskConical,    label: 'Backtester' },
+            { id: 'portfolio', icon: Briefcase,       label: 'Rule Positions' },
+            { id: 'orders',    icon: History,         label: 'Order History' },
+            { id: 'analytics', icon: PieChart,        label: 'Market Sentiment' },
+            { id: 'paper',     icon: Activity,        label: 'Paper Trading' },
+            { id: 'signals',   icon: BookOpen,        label: 'Signal Log' },
           ].map(item => (
             <button
               key={item.id}
@@ -258,6 +267,9 @@ const App = () => {
           {activeTab === 'terminal' && (
             <Terminal marketData={marketData} onOrder={placeOrder} positions={positions} />
           )}
+          {activeTab === 'clicktrade' && <ClickTrade />}
+          {activeTab === 'algo' && <AlgoScripts />}
+          {activeTab === 'backtest' && <BacktestRunner />}
           {activeTab === 'portfolio' && (
             <Portfolio orders={orders} balance={balance} marketData={marketData} positions={positions} />
           )}

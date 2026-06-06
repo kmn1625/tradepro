@@ -9,3 +9,4 @@ dist/
 *.err
 .planning/phases/**/*-SUMMARY.md
 .planning/phases/**/*-STATE.md
+.claude/
