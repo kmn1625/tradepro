@@ -3,6 +3,7 @@ node_modules/
 .env.local
 .session.json
 dist/
+.vite/
 .DS_Store
 *.log
 *.err
