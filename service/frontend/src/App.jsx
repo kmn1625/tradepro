@@ -65,6 +65,8 @@ const App = () => {
   const [balance, setBalance] = useState(500000);
   const [orders, setOrders] = useState([]);
   const [positions, setPositions] = useState({});
+  const [strategyId, setStrategyId] = useState('');
+  const [strategyInput, setStrategyInput] = useState('');
 
   // Auth
   useEffect(() => {
@@ -112,18 +114,47 @@ const App = () => {
     });
   }, [user]);
 
-  // Live Market Feed — track pct change from basePrice
+  const [wsStatus, setWsStatus] = useState('CONNECTING');
+  const wsRef = useRef(null);
+
+  // Live Market Feed — real WebSocket from backend
   useEffect(() => {
-    const interval = setInterval(() => {
-      setMarketData(current => current.map(stock => {
-        const move = (Math.random() - 0.5) * (stock.type === 'INDEX' ? 10 : 2);
-        const newPrice = Math.max(stock.price + move, stock.basePrice * 0.5);
-        const change = newPrice - stock.basePrice;
-        const pct = (change / stock.basePrice) * 100;
-        return { ...stock, price: newPrice, change, pct, trend: move > 0 ? 'up' : 'down' };
-      }));
-    }, 1500);
-    return () => clearInterval(interval);
+    const WS_URL = (import.meta.env.VITE_WS_URL || 'ws://localhost:5000');
+    let ws;
+    let reconnectTimer;
+
+    const connect = () => {
+      ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => setWsStatus('LIVE');
+
+      ws.onmessage = (evt) => {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch { return; }
+        if (msg.type === 'PRICE_UPDATE') {
+          setMarketData(current => current.map(s => {
+            if (s.symbol !== msg.symbol) return s;
+            const change = msg.price - s.basePrice;
+            const pct = (change / s.basePrice) * 100;
+            return { ...s, price: msg.price, change, pct, trend: msg.price >= s.price ? 'up' : 'down' };
+          }));
+        }
+      };
+
+      ws.onclose = () => {
+        setWsStatus('CONNECTING');
+        reconnectTimer = setTimeout(connect, 5000);
+      };
+
+      ws.onerror = () => ws.close();
+    };
+
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (wsRef.current) wsRef.current.close();
+    };
   }, []);
 
   const placeOrder = async (symbol, type, price, qty = 1, isFlip = false) => {
@@ -216,8 +247,8 @@ const App = () => {
             <div className="h-8 w-[1px] bg-slate-200" />
             <div className="text-right">
               <span className="block text-[10px] font-bold text-slate-400 uppercase">Status</span>
-              <div className="text-xs font-bold text-emerald-500 flex items-center gap-1">
-                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" /> LIVE FEED
+              <div className={`text-xs font-bold flex items-center gap-1 ${wsStatus === 'LIVE' ? 'text-emerald-500' : 'text-amber-400'}`}>
+                <div className={`w-1.5 h-1.5 rounded-full ${wsStatus === 'LIVE' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} /> {wsStatus}
               </div>
             </div>
           </div>
@@ -232,7 +263,27 @@ const App = () => {
           )}
           {activeTab === 'orders' && <OrderHistory orders={orders} />}
           {activeTab === 'analytics' && <MarketInsights />}
-          {activeTab === 'paper' && <PaperTrading strategyId={null} />}
+          {activeTab === 'paper' && (
+            <div className="space-y-6">
+              <div className="max-w-4xl mx-auto bg-white rounded-[2rem] border border-slate-200 p-6 flex items-center gap-4 shadow-sm">
+                <input
+                  type="text"
+                  value={strategyInput}
+                  onChange={e => setStrategyInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && setStrategyId(strategyInput.trim())}
+                  placeholder="Paste webhook strategy token…"
+                  className="flex-1 border border-slate-200 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+                <button
+                  onClick={() => setStrategyId(strategyInput.trim())}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl font-bold text-sm transition-all"
+                >
+                  Connect
+                </button>
+              </div>
+              <PaperTrading strategyId={strategyId || null} />
+            </div>
+          )}
           {activeTab === 'signals' && <SignalLog />}
         </div>
       </main>
