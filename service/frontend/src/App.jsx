@@ -104,13 +104,18 @@ const App = () => {
       const fetchedOrders = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setOrders(fetchedOrders);
 
+      // Rebuild positions — process in chronological order (oldest first)
       const pos = {};
-      fetchedOrders.forEach(o => {
-        if (o.status === 'SQUARED_OFF') return; // don't count close-out orders in position qty
+      [...fetchedOrders].reverse().forEach(o => {
         if (!pos[o.symbol]) pos[o.symbol] = { qty: 0, avgPrice: 0, totalCost: 0 };
-        const qty = o.type === 'BUY' || o.type === 'CALL' ? 1 : -1;
-        pos[o.symbol].qty += qty;
-        pos[o.symbol].totalCost += qty * parseFloat(o.price);
+        if (o.status === 'SQUARED_OFF') {
+          // Full close — zero out position
+          pos[o.symbol] = { qty: 0, avgPrice: 0, totalCost: 0 };
+          return;
+        }
+        const dir = o.type === 'BUY' || o.type === 'CALL' ? 1 : -1;
+        pos[o.symbol].qty += dir;
+        pos[o.symbol].totalCost += dir * parseFloat(o.price);
       });
       // Compute avg entry price
       Object.values(pos).forEach(p => {
@@ -162,6 +167,20 @@ const App = () => {
       if (wsRef.current) wsRef.current.close();
     };
   }, []);
+
+  const squareOffPosition = async (symbol, price) => {
+    if (!user || !db) return;
+    const pos = positions[symbol];
+    if (!pos || pos.qty === 0) return;
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'orders'), {
+      symbol,
+      type: pos.qty > 0 ? 'SELL' : 'BUY',
+      price: parseFloat(price).toFixed(2),
+      time: Date.now(),
+      status: 'SQUARED_OFF',
+      qty: Math.abs(pos.qty),
+    });
+  };
 
   const placeOrder = async (symbol, type, price, qty = 1, isFlip = false) => {
     if (!user || !db) return;
@@ -271,7 +290,7 @@ const App = () => {
           {activeTab === 'algo' && <AlgoScripts />}
           {activeTab === 'backtest' && <BacktestRunner />}
           {activeTab === 'portfolio' && (
-            <Portfolio orders={orders} balance={balance} marketData={marketData} positions={positions} />
+            <Portfolio orders={orders} balance={balance} marketData={marketData} positions={positions} onSquareOff={squareOffPosition} />
           )}
           {activeTab === 'orders' && <OrderHistory orders={orders} />}
           {activeTab === 'analytics' && <MarketInsights />}
@@ -471,12 +490,23 @@ const Terminal = ({ marketData, onOrder, positions }) => {
   );
 };
 
-const Portfolio = ({ orders, balance, marketData, positions }) => {
+const Portfolio = ({ orders, balance, marketData, positions, onSquareOff }) => {
+  const [squaringOff, setSquaringOff] = useState({});
+
   const holdings = useMemo(() => {
     return Object.entries(positions)
       .filter(([, v]) => v.qty !== 0)
       .map(([symbol, v]) => ({ symbol, ...v }));
   }, [positions]);
+
+  const handleSquareOff = async (symbol, price) => {
+    setSquaringOff(prev => ({ ...prev, [symbol]: true }));
+    try {
+      await onSquareOff?.(symbol, price);
+    } finally {
+      setSquaringOff(prev => ({ ...prev, [symbol]: false }));
+    }
+  };
 
   const totalInvested = useMemo(() =>
     holdings.reduce((sum, h) => sum + Math.abs(h.totalCost), 0),
@@ -530,28 +560,39 @@ const Portfolio = ({ orders, balance, marketData, positions }) => {
                 <th className="px-8 py-5 text-right">Avg Price</th>
                 <th className="px-8 py-5 text-right">LTP</th>
                 <th className="px-8 py-5 text-right">Day P&L</th>
+                <th className="px-8 py-5 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {holdings.length === 0 ? (
                 <tr>
-                  <td colSpan="5" className="px-8 py-16 text-center text-slate-300 font-bold italic">
+                  <td colSpan="6" className="px-8 py-16 text-center text-slate-300 font-bold italic">
                     No active trades in system.
                   </td>
                 </tr>
               ) : holdings.map(({ symbol, qty, avgPrice }) => {
                 const ltp = marketData.find(m => m.symbol === symbol)?.price || avgPrice;
                 const pnl = (ltp - avgPrice) * qty;
+                const isSelling = squaringOff[symbol];
                 return (
                   <tr key={symbol} className="hover:bg-slate-50 transition-colors">
                     <td className="px-8 py-6 font-black text-slate-800">{symbol}</td>
                     <td className="px-8 py-6 text-center">
-                      <span className="bg-slate-100 px-3 py-1 rounded-lg font-mono font-bold text-slate-600">{qty}</span>
+                      <span className={`px-3 py-1 rounded-lg font-mono font-bold ${qty > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{qty > 0 ? '+' : ''}{qty}</span>
                     </td>
                     <td className="px-8 py-6 text-right font-mono">₹{avgPrice.toFixed(2)}</td>
                     <td className="px-8 py-6 text-right font-mono font-bold">₹{ltp.toFixed(2)}</td>
                     <td className={`px-8 py-6 text-right font-black ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                       {pnl >= 0 ? '+' : ''}₹{pnl.toFixed(2)}
+                    </td>
+                    <td className="px-8 py-6 text-right">
+                      <button
+                        onClick={() => handleSquareOff(symbol, ltp)}
+                        disabled={isSelling}
+                        className="bg-rose-500 hover:bg-rose-600 disabled:opacity-50 text-white text-xs font-black px-4 py-2 rounded-xl transition-all uppercase tracking-wide"
+                      >
+                        {isSelling ? 'Closing…' : 'Square Off'}
+                      </button>
                     </td>
                   </tr>
                 );

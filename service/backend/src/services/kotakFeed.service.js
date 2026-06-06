@@ -22,17 +22,27 @@ class KotakFeedService {
     this._reconnectTimer = null;
     this._connected = false;
     this._pingInterval = null;
+    this._mockInterval = null;
   }
 
   // Public: start streaming live ticks.
   // broadcastFn receives { type, symbol, price, time } and { type, symbol, interval, ... } objects.
   startFeed(broadcastFn) {
     this._broadcastFn = broadcastFn;
-    this._connect();
+    if (session.isAuthenticated()) {
+      this._connect();
+    } else {
+      console.warn('[KotakFeed] No Kotak session — starting mock price feed');
+      this._startMockFeed();
+    }
   }
 
   // Public: stop streaming and clean up resources.
   stopFeed() {
+    if (this._mockInterval) {
+      clearInterval(this._mockInterval);
+      this._mockInterval = null;
+    }
     if (this._pingInterval) {
       clearInterval(this._pingInterval);
       this._pingInterval = null;
@@ -49,6 +59,25 @@ class KotakFeedService {
   }
 
   // --- Private ---
+
+  _startMockFeed() {
+    // Simulates live price feed using random walk — used when Kotak session is not active.
+    // Symbols must match INITIAL_WATCHLIST in frontend App.jsx.
+    const mockPrices = {
+      'NIFTY 50 (Index)':   22453.20,
+      'BANK NIFTY (Index)': 47285.10,
+      'GOLD (MCX)':         62450.00,
+      'CRUDEOIL (MCX)':     6450.00,
+    };
+    this._mockInterval = setInterval(() => {
+      for (const [symbol, basePrice] of Object.entries(mockPrices)) {
+        // Random walk: ±0.08% per tick
+        const delta = basePrice * (Math.random() - 0.5) * 0.0016;
+        mockPrices[symbol] = parseFloat((mockPrices[symbol] + delta).toFixed(2));
+        this._broadcastFn({ type: 'PRICE_UPDATE', symbol, price: mockPrices[symbol], time: Date.now() });
+      }
+    }, 1000);
+  }
 
   _connect() {
     if (!session.isAuthenticated()) {

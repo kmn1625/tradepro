@@ -12,19 +12,14 @@ const optionsController = {
   async getChain(req, res) {
     const { symbol = 'NIFTY', expiry } = req.query;
 
-    if (!session.isAuthenticated()) {
-      // TODO: fall back to Angel One / Upstox when Kotak session not active
-      return res.status(503).json({
-        error: 'Broker session not active',
-        hint: 'POST /api/auth/login first, or Angel One integration pending',
-      });
-    }
-
     try {
-      // TODO: implement Kotak Neo option chain fetch
-      // Kotak API: GET /rest/neo/v1/option-chain?symbol={symbol}&expiry={expiry}
-      // For now return stub data so frontend renders correctly
-      const spot = 22500;
+      if (session.isAuthenticated()) {
+        // TODO: implement Kotak Neo option chain fetch
+        // Kotak API: GET /rest/neo/v1/option-chain?symbol={symbol}&expiry={expiry}
+      }
+      // Stub data — works whether or not Kotak is authenticated
+      const SPOT_PRICES = { NIFTY: 22500, BANKNIFTY: 47300, FINNIFTY: 21800 };
+      const spot = SPOT_PRICES[symbol] || 22500;
       const strikes = [];
       for (let offset = -10; offset <= 10; offset++) {
         const strike = spot + offset * 50;
