@@ -1,12 +1,10 @@
 'use strict';
 
-// AI condition builder — converts plain English strategy description to condition JSON.
-// Uses Claude Haiku (claude-haiku-4-5) via Anthropic SDK.
-// TODO: npm install @anthropic-ai/sdk in backend, set ANTHROPIC_API_KEY in .env
-
+const Anthropic = require('@anthropic-ai/sdk');
 const { SUPPORTED_INDICATORS, OPERATORS, validate } = require('../config/conditionSchema');
 
-const SYSTEM_PROMPT = `You are a trading strategy parser. Convert plain English strategy descriptions into a structured JSON condition object.
+// System prompt is static — cache it with Anthropic prompt caching to save ~90% tokens on repeated calls.
+const SYSTEM_PROMPT_TEXT = `You are a trading strategy parser. Convert plain English strategy descriptions into a structured JSON condition object.
 
 Supported indicators: ${SUPPORTED_INDICATORS.join(', ')}
 Supported operators: ${OPERATORS.join(', ')}
@@ -42,26 +40,40 @@ const aiController = {
       return res.status(501).json({
         error: 'AI condition builder not configured',
         hint: 'Set ANTHROPIC_API_KEY in .env',
-        status: 'COMING_SOON',
       });
     }
 
     try {
-      // TODO: integrate Anthropic SDK
-      // const Anthropic = require('@anthropic-ai/sdk');
-      // const client = new Anthropic({ apiKey });
-      // const msg = await client.messages.create({
-      //   model: 'claude-haiku-4-5-20251001',
-      //   max_tokens: 1024,
-      //   system: SYSTEM_PROMPT,
-      //   messages: [{ role: 'user', content: text }],
-      // });
-      // const raw = msg.content[0].text;
-      // const condition = JSON.parse(raw);
-      // if (!validate(condition.entry) || !validate(condition.exit)) throw new Error('AI returned invalid condition schema');
-      // return res.json({ condition });
+      const client = new Anthropic({ apiKey });
+      const msg = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        system: [
+          {
+            type: 'text',
+            text: SYSTEM_PROMPT_TEXT,
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
+        messages: [{ role: 'user', content: text }],
+      });
 
-      return res.status(501).json({ error: 'Anthropic SDK not yet installed', status: 'COMING_SOON' });
+      const raw = msg.content[0].text.trim();
+      let condition;
+      try {
+        condition = JSON.parse(raw);
+      } catch {
+        throw new Error('AI returned non-JSON response: ' + raw.slice(0, 200));
+      }
+
+      if (!condition.entry || !condition.exit) {
+        throw new Error('AI response missing entry or exit fields');
+      }
+      if (!validate(condition.entry) || !validate(condition.exit)) {
+        throw new Error('AI returned invalid condition schema');
+      }
+
+      return res.json({ condition });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

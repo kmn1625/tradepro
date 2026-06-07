@@ -7,7 +7,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: "./src/test-setup.js",
-    reporters: ["default", "tdd-guard-vitest/reporter"],
+    reporters: ["default", "tdd-guard-vitest"],
   },
   server: {
     port: 5173,

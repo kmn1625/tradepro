@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import LivePrice from "./components/LivePrice";
 import CandleChart from "./components/CandleChart";
 import PaperTrading from "./components/PaperTrading";
@@ -6,12 +6,14 @@ import SignalLog from "./components/SignalLog";
 import ClickTrade from "./components/ClickTrade";
 import BacktestRunner from "./components/BacktestRunner";
 import AlgoScripts from "./components/AlgoScripts";
+import Strategies from "./components/Strategies";
+import Watchlist from "./components/Watchlist";
+import MarketDepth from "./components/MarketDepth";
 import {
   TrendingUp,
   LayoutDashboard,
   Briefcase,
   History,
-  Settings,
   ArrowUpRight,
   ArrowDownRight,
   Wallet,
@@ -25,15 +27,15 @@ import {
   BookOpen,
   Layers,
   FlaskConical,
-  Bot
+  Bot,
+  Key,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 
-// --- FIREBASE CONFIG FROM ENV ---
-// Safe init — Firebase throws if projectId is undefined (env vars missing).
-// Falls back to null so the rest of the app renders without orders/auth.
 const appId = 'neotrade-dev';
 let auth = null;
 let db = null;
@@ -54,25 +56,54 @@ try {
   console.warn('Firebase init failed — orders/auth disabled:', err.message);
 }
 
-// --- MOCK DATA ---
-const INITIAL_WATCHLIST = [
-  { symbol: 'NIFTY 50 (Index)', basePrice: 22453.20, price: 22453.20, type: 'INDEX' },
-  { symbol: 'BANK NIFTY (Index)', basePrice: 47285.10, price: 47285.10, type: 'INDEX' },
-  { symbol: 'GOLD (MCX)', basePrice: 62450.00, price: 62450.00, type: 'MCX' },
-  { symbol: 'CRUDEOIL (MCX)', basePrice: 6450.00, price: 6450.00, type: 'MCX' },
-];
-
 const App = () => {
   const [activeTab, setActiveTab] = useState('terminal');
   const [user, setUser] = useState(null);
-  const [marketData, setMarketData] = useState(
-    INITIAL_WATCHLIST.map(s => ({ ...s, change: 0, pct: 0, trend: 'up' }))
-  );
+
+  // Live market data as a map — updated by WS
+  const [marketDataMap, setMarketDataMap] = useState({});
+
+  // Active watchlist symbols — notified by Watchlist component
+  const [watchlistSymbols, setWatchlistSymbols] = useState([
+    { symbol: 'NIFTY 50 (Index)',   type: 'INDEX', basePrice: 22453.20 },
+    { symbol: 'BANK NIFTY (Index)', type: 'INDEX', basePrice: 47285.10 },
+    { symbol: 'GOLD (MCX)',         type: 'MCX',   basePrice: 62450.00 },
+    { symbol: 'CRUDEOIL (MCX)',     type: 'MCX',   basePrice: 6450.00  },
+  ]);
+
   const [balance, setBalance] = useState(500000);
   const [orders, setOrders] = useState([]);
   const [positions, setPositions] = useState({});
   const [strategyId, setStrategyId] = useState('');
   const [strategyInput, setStrategyInput] = useState('');
+  const [wsStatus, setWsStatus] = useState('CONNECTING');
+  const wsRef = useRef(null);
+
+  // Derived: marketData array from active watchlist + live map
+  const marketData = useMemo(() =>
+    watchlistSymbols.map(s => {
+      const live = marketDataMap[s.symbol] || {};
+      return {
+        ...s,
+        price: live.price || s.basePrice || 0,
+        pct: live.pct ?? 0,
+        change: live.change ?? 0,
+        trend: live.trend || 'up',
+        bid: live.bid,
+        ask: live.ask,
+        volume: live.volume,
+        open: live.open,
+        high: live.high,
+        low: live.low,
+        prevClose: live.prevClose,
+        weekHigh52: live.weekHigh52,
+        weekLow52: live.weekLow52,
+        circuitUpper: live.circuitUpper,
+        circuitLower: live.circuitLower,
+      };
+    }),
+    [watchlistSymbols, marketDataMap]
+  );
 
   // Auth
   useEffect(() => {
@@ -104,12 +135,10 @@ const App = () => {
       const fetchedOrders = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setOrders(fetchedOrders);
 
-      // Rebuild positions — process in chronological order (oldest first)
       const pos = {};
       [...fetchedOrders].reverse().forEach(o => {
         if (!pos[o.symbol]) pos[o.symbol] = { qty: 0, avgPrice: 0, totalCost: 0 };
         if (o.status === 'SQUARED_OFF') {
-          // Full close — zero out position
           pos[o.symbol] = { qty: 0, avgPrice: 0, totalCost: 0 };
           return;
         }
@@ -117,7 +146,6 @@ const App = () => {
         pos[o.symbol].qty += dir;
         pos[o.symbol].totalCost += dir * parseFloat(o.price);
       });
-      // Compute avg entry price
       Object.values(pos).forEach(p => {
         p.avgPrice = p.qty !== 0 ? Math.abs(p.totalCost / p.qty) : 0;
       });
@@ -125,10 +153,7 @@ const App = () => {
     });
   }, [user]);
 
-  const [wsStatus, setWsStatus] = useState('CONNECTING');
-  const wsRef = useRef(null);
-
-  // Live Market Feed — real WebSocket from backend
+  // Live Market Feed
   useEffect(() => {
     const WS_URL = (import.meta.env.VITE_WS_URL || 'ws://localhost:5000');
     let ws;
@@ -143,13 +168,37 @@ const App = () => {
       ws.onmessage = (evt) => {
         let msg;
         try { msg = JSON.parse(evt.data); } catch { return; }
+
         if (msg.type === 'PRICE_UPDATE') {
-          setMarketData(current => current.map(s => {
-            if (s.symbol !== msg.symbol) return s;
-            const change = msg.price - s.basePrice;
-            const pct = (change / s.basePrice) * 100;
-            return { ...s, price: msg.price, change, pct, trend: msg.price >= s.price ? 'up' : 'down' };
-          }));
+          setMarketDataMap(prev => {
+            const existing = prev[msg.symbol] || {};
+            const basePrice = existing.basePrice || msg.open || msg.price;
+            const prevClose = msg.prevClose || existing.prevClose || msg.price;
+            const change = parseFloat((msg.price - prevClose).toFixed(2));
+            const pct = prevClose ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
+            return {
+              ...prev,
+              [msg.symbol]: {
+                ...existing,
+                basePrice: existing.basePrice || basePrice,
+                price: msg.price,
+                bid: msg.bid,
+                ask: msg.ask,
+                volume: msg.volume,
+                open: msg.open,
+                high: msg.high,
+                low: msg.low,
+                prevClose,
+                weekHigh52: msg.weekHigh52,
+                weekLow52: msg.weekLow52,
+                circuitUpper: msg.circuitUpper,
+                circuitLower: msg.circuitLower,
+                change,
+                pct,
+                trend: msg.price >= (existing.price || msg.price) ? 'up' : 'down',
+              },
+            };
+          });
         }
       };
 
@@ -166,6 +215,15 @@ const App = () => {
       clearTimeout(reconnectTimer);
       if (wsRef.current) wsRef.current.close();
     };
+  }, []);
+
+  // Notify backend of active watchlist symbols so it can generate mock data for new ones
+  const handleWatchlistChange = useCallback((symbols) => {
+    setWatchlistSymbols(symbols);
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'SUBSCRIBE_SYMBOLS', symbols }));
+    }
   }, []);
 
   const squareOffPosition = async (symbol, price) => {
@@ -198,8 +256,7 @@ const App = () => {
       }
     }
     await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'orders'), {
-      symbol,
-      type,
+      symbol, type,
       price: price.toFixed(2),
       time: Date.now(),
       status: 'EXECUTED',
@@ -222,15 +279,16 @@ const App = () => {
 
         <div className="flex-1 space-y-2 px-3">
           {[
-            { id: 'terminal',  icon: LayoutDashboard, label: 'Execution Terminal' },
-            { id: 'clicktrade',icon: Layers,          label: 'ClickTrade' },
-            { id: 'algo',      icon: Bot,             label: 'Algo Scripts' },
-            { id: 'backtest',  icon: FlaskConical,    label: 'Backtester' },
-            { id: 'portfolio', icon: Briefcase,       label: 'Rule Positions' },
-            { id: 'orders',    icon: History,         label: 'Order History' },
-            { id: 'analytics', icon: PieChart,        label: 'Market Sentiment' },
-            { id: 'paper',     icon: Activity,        label: 'Paper Trading' },
-            { id: 'signals',   icon: BookOpen,        label: 'Signal Log' },
+            { id: 'terminal',   icon: LayoutDashboard, label: 'Execution Terminal' },
+            { id: 'clicktrade', icon: Layers,          label: 'ClickTrade' },
+            { id: 'algo',       icon: Bot,             label: 'Algo Scripts' },
+            { id: 'backtest',   icon: FlaskConical,    label: 'Backtester' },
+            { id: 'portfolio',  icon: Briefcase,       label: 'Rule Positions' },
+            { id: 'orders',     icon: History,         label: 'Order History' },
+            { id: 'analytics',  icon: PieChart,        label: 'Market Sentiment' },
+            { id: 'strategies', icon: Key,             label: 'Strategies' },
+            { id: 'paper',      icon: Activity,        label: 'Paper Trading' },
+            { id: 'signals',    icon: BookOpen,        label: 'Signal Log' },
           ].map(item => (
             <button
               key={item.id}
@@ -284,7 +342,14 @@ const App = () => {
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-[#f8fafc]">
           {activeTab === 'terminal' && (
-            <Terminal marketData={marketData} onOrder={placeOrder} positions={positions} />
+            <Terminal
+              marketData={marketData}
+              marketDataMap={marketDataMap}
+              onOrder={placeOrder}
+              positions={positions}
+              wsRef={wsRef}
+              onWatchlistChange={handleWatchlistChange}
+            />
           )}
           {activeTab === 'clicktrade' && <ClickTrade />}
           {activeTab === 'algo' && <AlgoScripts />}
@@ -294,6 +359,7 @@ const App = () => {
           )}
           {activeTab === 'orders' && <OrderHistory orders={orders} />}
           {activeTab === 'analytics' && <MarketInsights />}
+          {activeTab === 'strategies' && <Strategies />}
           {activeTab === 'paper' && (
             <div className="space-y-6">
               <div className="max-w-4xl mx-auto bg-white rounded-[2rem] border border-slate-200 p-6 flex items-center gap-4 shadow-sm">
@@ -322,57 +388,63 @@ const App = () => {
   );
 };
 
-const Terminal = ({ marketData, onOrder, positions }) => {
-  const [selected, setSelected] = useState(marketData[0]);
+// ─── Terminal ────────────────────────────────────────────────────────────────
+
+const Terminal = ({ marketData, marketDataMap, onOrder, positions, wsRef, onWatchlistChange }) => {
+  const [selectedSymbol, setSelectedSymbol] = useState(marketData[0]?.symbol || '');
   const [isLocked, setIsLocked] = useState(false);
+  const [showDepth, setShowDepth] = useState(false);
   const [lastExitPrice, setLastExitPrice] = useState(null);
 
-  // Keep selected in sync when marketData updates
+  // Keep selectedSymbol valid when watchlist changes
   useEffect(() => {
-    setSelected(prev => marketData.find(m => m.symbol === prev.symbol) || marketData[0]);
-  }, [marketData]);
+    if (!marketData.find(m => m.symbol === selectedSymbol) && marketData[0]) {
+      setSelectedSymbol(marketData[0].symbol);
+    }
+  }, [marketData, selectedSymbol]);
 
-  const currentPos = positions[selected?.symbol]?.qty || 0;
-  const entryPrice = positions[selected?.symbol]?.avgPrice || 0;
-  const unrealizedPnl = currentPos !== 0 && selected
-    ? (selected.price - entryPrice) * currentPos
-    : 0;
+  const selected = marketData.find(m => m.symbol === selectedSymbol) || marketData[0] || {};
+  const liveData = marketDataMap[selected.symbol] || {};
+
+  const price      = selected.price || 0;
+  const pct        = selected.pct || 0;
+  const open       = liveData.open || selected.open || price;
+  const dayHigh    = liveData.high || selected.high || price;
+  const dayLow     = liveData.low || selected.low || price;
+  const prevClose  = liveData.prevClose || price;
+  const volume     = liveData.volume || selected.volume || 0;
+  const bid        = liveData.bid || price;
+  const ask        = liveData.ask || price;
+  const wk52High   = liveData.weekHigh52 || price;
+  const wk52Low    = liveData.weekLow52 || price;
+  const circUpper  = liveData.circuitUpper;
+  const circLower  = liveData.circuitLower;
+
+  const wk52Range  = wk52High - wk52Low;
+  const wk52Pos    = wk52Range > 0 ? Math.min(100, Math.max(0, ((price - wk52Low) / wk52Range) * 100)) : 50;
+
+  const currentPos     = positions[selected?.symbol]?.qty || 0;
+  const entryPrice     = positions[selected?.symbol]?.avgPrice || 0;
+  const unrealizedPnl  = currentPos !== 0 ? (price - entryPrice) * currentPos : 0;
+
+  function fmtVol(v) {
+    if (!v) return '—';
+    if (v >= 1e7) return (v / 1e7).toFixed(1) + ' Cr';
+    if (v >= 1e5) return (v / 1e5).toFixed(1) + ' L';
+    if (v >= 1000) return (v / 1000).toFixed(0) + 'K';
+    return String(v);
+  }
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 max-w-[1700px] mx-auto">
+      {/* LEFT — Watchlist + Rule Monitor */}
       <div className="xl:col-span-4 space-y-6">
-        <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-6 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
-            <h2 className="font-black text-slate-800">Watchlist</h2>
-            <Settings size={18} className="text-slate-400" />
-          </div>
-          <div className="max-h-[400px] overflow-y-auto">
-            {marketData.map(stock => (
-              <div
-                key={stock.symbol}
-                onClick={() => setSelected(stock)}
-                className={`p-5 border-b border-slate-50 cursor-pointer transition-all flex items-center justify-between ${
-                  selected?.symbol === stock.symbol
-                    ? 'bg-indigo-50/50 border-l-4 border-l-indigo-600'
-                    : 'hover:bg-slate-50'
-                }`}
-              >
-                <div>
-                  <p className="font-bold text-slate-900">{stock.symbol}</p>
-                  <p className="text-[10px] font-black text-slate-400">{stock.type}</p>
-                </div>
-                <div className="text-right font-mono">
-                  <p className={`font-bold ${stock.pct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {stock.price.toFixed(2)}
-                  </p>
-                  <p className={`text-[10px] ${stock.pct >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                    {stock.pct >= 0 ? '+' : ''}{stock.pct.toFixed(2)}%
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <Watchlist
+          marketDataMap={marketDataMap}
+          onSymbolSelect={setSelectedSymbol}
+          selectedSymbol={selectedSymbol}
+          onWatchlistChange={onWatchlistChange}
+        />
 
         <div className="bg-[#0f172a] rounded-[2rem] p-6 text-white">
           <h3 className="text-sm font-bold uppercase tracking-widest text-slate-500 mb-4 flex items-center gap-2">
@@ -380,10 +452,10 @@ const Terminal = ({ marketData, onOrder, positions }) => {
           </h3>
           <div className="space-y-3">
             {[
-              { label: 'Break-even Protection', status: 'ACTIVE', rule: 'Rule 2' },
-              { label: '10-pt Profit Lock', status: isLocked ? 'LOCKED' : 'MONITORING', rule: 'Rule 4' },
-              { label: 'Trend Continuation', status: currentPos !== 0 ? 'FOLLOWING' : 'IDLE', rule: 'Rule 1' },
-              { label: 'Re-entry Detection', status: lastExitPrice ? 'WATCHING' : 'OFF', rule: 'Rule 3/5' },
+              { label: 'Break-even Protection', status: 'ACTIVE',                                    rule: 'Rule 2' },
+              { label: '10-pt Profit Lock',     status: isLocked ? 'LOCKED' : 'MONITORING',          rule: 'Rule 4' },
+              { label: 'Trend Continuation',    status: currentPos !== 0 ? 'FOLLOWING' : 'IDLE',     rule: 'Rule 1' },
+              { label: 'Re-entry Detection',    status: lastExitPrice ? 'WATCHING' : 'OFF',          rule: 'Rule 3/5' },
             ].map(r => (
               <div key={r.label} className="flex items-center justify-between bg-slate-800/50 p-3 rounded-xl border border-slate-700">
                 <div>
@@ -391,81 +463,172 @@ const Terminal = ({ marketData, onOrder, positions }) => {
                   <p className="text-[10px] text-slate-500">{r.rule}</p>
                 </div>
                 <span className={`text-[10px] font-black px-2 py-0.5 rounded ${
-                  r.status === 'LOCKED' || r.status === 'ACTIVE'
-                    ? 'bg-indigo-500 text-white'
-                    : 'bg-slate-700 text-slate-400'
-                }`}>
-                  {r.status}
-                </span>
+                  r.status === 'LOCKED' || r.status === 'ACTIVE' ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-400'
+                }`}>{r.status}</span>
               </div>
             ))}
           </div>
         </div>
       </div>
 
+      {/* RIGHT — Stock detail */}
       <div className="xl:col-span-8 space-y-6">
         <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 p-8">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+          {/* Header row */}
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
             <div>
               <div className="flex items-center gap-3 mb-1">
-                <h2 className="text-4xl font-black text-slate-900">{selected?.symbol}</h2>
+                <h2 className="text-4xl font-black text-slate-900">{selected?.symbol || '—'}</h2>
                 <span className="bg-slate-100 text-slate-500 text-[10px] font-bold px-2 py-1 rounded">WEEKLY EXPIRY</span>
+                {circUpper && price >= circUpper * 0.98 && (
+                  <span className="bg-rose-100 text-rose-600 text-[10px] font-black px-2 py-1 rounded animate-pulse">UPPER FREEZE</span>
+                )}
+                {circLower && price <= circLower * 1.02 && (
+                  <span className="bg-emerald-100 text-emerald-600 text-[10px] font-black px-2 py-1 rounded animate-pulse">LOWER FREEZE</span>
+                )}
               </div>
               <div className="text-slate-500 font-medium">
-                LTP: <span className="font-mono text-indigo-600 font-bold">₹{selected?.price.toFixed(2)}</span>
+                LTP: <span className="font-mono text-indigo-600 font-bold">₹{price.toFixed(2)}</span>
+                <span className={`ml-3 text-sm font-bold ${pct >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                  {pct >= 0 ? '▲' : '▼'} {Math.abs(pct).toFixed(2)}%
+                </span>
               </div>
             </div>
             <div className="flex gap-3">
               <button
-                onClick={() => onOrder(selected.symbol, 'FLIP', selected.price, 1, true)}
+                onClick={() => onOrder(selected.symbol, 'FLIP', price, 1, true)}
                 className="flex items-center gap-2 bg-slate-900 text-white px-6 py-3 rounded-2xl font-bold hover:bg-black transition-all active:scale-95"
               >
-                <RefreshCw size={18} /> FLIP DIRECTION
+                <RefreshCw size={18} /> FLIP
               </button>
               <button
                 onClick={() => setIsLocked(!isLocked)}
-                className={`p-3 rounded-2xl border transition-all ${
-                  isLocked
-                    ? 'bg-indigo-50 border-indigo-200 text-indigo-600'
-                    : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'
-                }`}
+                className={`p-3 rounded-2xl border transition-all ${isLocked ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
               >
                 {isLocked ? <Lock size={20} /> : <Unlock size={20} />}
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 mb-8">
+          {/* OHLC + Volume + Bid/Ask stats */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            {[
+              { label: 'Open',     val: `₹${open.toFixed(2)}` },
+              { label: 'High',     val: `₹${dayHigh.toFixed(2)}`,  color: 'text-emerald-600' },
+              { label: 'Low',      val: `₹${dayLow.toFixed(2)}`,   color: 'text-rose-600' },
+              { label: 'Prev Close', val: `₹${prevClose.toFixed(2)}` },
+            ].map(s => (
+              <div key={s.label} className="bg-slate-50 rounded-xl px-4 py-3">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">{s.label}</p>
+                <p className={`text-sm font-mono font-bold ${s.color || 'text-slate-700'}`}>{s.val}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            <div className="bg-slate-50 rounded-xl px-4 py-3">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Volume</p>
+              <p className="text-sm font-mono font-bold text-slate-700">{fmtVol(volume)}</p>
+            </div>
+            <div className="bg-emerald-50 rounded-xl px-4 py-3">
+              <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-wider mb-1">Bid</p>
+              <p className="text-sm font-mono font-bold text-emerald-700">₹{bid.toFixed(2)}</p>
+            </div>
+            <div className="bg-rose-50 rounded-xl px-4 py-3">
+              <p className="text-[10px] font-bold text-rose-400 uppercase tracking-wider mb-1">Ask</p>
+              <p className="text-sm font-mono font-bold text-rose-700">₹{ask.toFixed(2)}</p>
+            </div>
+          </div>
+
+          {/* 52-week range */}
+          <div className="mb-6">
+            <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase mb-2">
+              <span>52W Low: ₹{wk52Low.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+              <span>52W High: ₹{wk52High.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+            </div>
+            <div className="relative h-2 bg-slate-100 rounded-full">
+              <div
+                className="absolute inset-y-0 left-0 bg-indigo-500 rounded-full"
+                style={{ width: `${wk52Pos}%` }}
+              />
+              <div
+                className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-indigo-600 rounded-full border-2 border-white shadow"
+                style={{ left: `calc(${wk52Pos}% - 6px)` }}
+              />
+            </div>
+            <div className="text-center mt-1 text-[10px] text-slate-400 font-bold">
+              {wk52Pos.toFixed(0)}% from 52W Low
+            </div>
+          </div>
+
+          {/* Circuit limits */}
+          {(circUpper || circLower) && (
+            <div className="flex gap-3 mb-6">
+              {circUpper && (
+                <div className="flex-1 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 text-center">
+                  <p className="text-[10px] font-bold text-rose-400 uppercase mb-0.5">Upper Circuit</p>
+                  <p className="text-sm font-mono font-bold text-rose-700">₹{circUpper.toFixed(2)}</p>
+                </div>
+              )}
+              {circLower && (
+                <div className="flex-1 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-center">
+                  <p className="text-[10px] font-bold text-emerald-500 uppercase mb-0.5">Lower Circuit</p>
+                  <p className="text-sm font-mono font-bold text-emerald-700">₹{circLower.toFixed(2)}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Trade buttons */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
             <button
-              onClick={() => onOrder(selected.symbol, 'CALL', selected.price)}
-              className="group relative bg-emerald-500 hover:bg-emerald-600 p-6 rounded-[1.5rem] text-white transition-all shadow-xl shadow-emerald-500/10 overflow-hidden"
+              onClick={() => onOrder(selected.symbol, 'CALL', price)}
+              className="group relative bg-emerald-500 hover:bg-emerald-600 p-5 rounded-[1.5rem] text-white transition-all shadow-xl shadow-emerald-500/10 overflow-hidden"
             >
               <div className="relative z-10 flex flex-col items-center gap-2">
-                <ArrowUpRight size={32} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
-                <span className="font-black text-xl">BUY CALL</span>
+                <ArrowUpRight size={28} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                <span className="font-black text-lg">BUY CALL</span>
                 <span className="text-[10px] font-bold opacity-70">TREND UPWARD</span>
               </div>
-              <div className="absolute top-0 right-0 p-4 opacity-10"><TrendingUp size={80} /></div>
+              <div className="absolute top-0 right-0 p-4 opacity-10"><TrendingUp size={70} /></div>
             </button>
             <button
-              onClick={() => onOrder(selected.symbol, 'PUT', selected.price)}
-              className="group relative bg-rose-500 hover:bg-rose-600 p-6 rounded-[1.5rem] text-white transition-all shadow-xl shadow-rose-500/10 overflow-hidden"
+              onClick={() => onOrder(selected.symbol, 'PUT', price)}
+              className="group relative bg-rose-500 hover:bg-rose-600 p-5 rounded-[1.5rem] text-white transition-all shadow-xl shadow-rose-500/10 overflow-hidden"
             >
               <div className="relative z-10 flex flex-col items-center gap-2">
-                <ArrowDownRight size={32} className="group-hover:translate-x-1 group-hover:translate-y-1 transition-transform" />
-                <span className="font-black text-xl">BUY PUT</span>
+                <ArrowDownRight size={28} className="group-hover:translate-x-1 group-hover:translate-y-1 transition-transform" />
+                <span className="font-black text-lg">BUY PUT</span>
                 <span className="text-[10px] font-bold opacity-70">TREND DOWNWARD</span>
               </div>
-              <div className="absolute top-0 right-0 p-4 opacity-10 rotate-180"><TrendingUp size={80} /></div>
+              <div className="absolute top-0 right-0 p-4 opacity-10 rotate-180"><TrendingUp size={70} /></div>
             </button>
           </div>
 
+          {/* Charts */}
           <div className="space-y-3">
             <LivePrice />
             <CandleChart symbol={selected?.symbol} interval="5m" height={300} />
           </div>
+
+          {/* Market Depth toggle */}
+          <div className="mt-6">
+            <button
+              onClick={() => setShowDepth(v => !v)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors text-sm font-bold text-slate-700"
+            >
+              <span>Market Depth</span>
+              {showDepth ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
+            {showDepth && (
+              <div className="mt-3 px-2">
+                <MarketDepth symbol={selected?.symbol} wsRef={wsRef} />
+              </div>
+            )}
+          </div>
         </div>
 
+        {/* Position P&L card */}
         <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 p-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
@@ -478,9 +641,7 @@ const Terminal = ({ marketData, onOrder, positions }) => {
           </div>
           <div className="text-right">
             <span className="block text-xs font-bold text-slate-400 uppercase tracking-tighter">Unrealized P&L</span>
-            <p className={`text-2xl font-black ${
-              unrealizedPnl > 0 ? 'text-emerald-500' : unrealizedPnl < 0 ? 'text-rose-500' : 'text-slate-300'
-            }`}>
+            <p className={`text-2xl font-black ${unrealizedPnl > 0 ? 'text-emerald-500' : unrealizedPnl < 0 ? 'text-rose-500' : 'text-slate-300'}`}>
               {unrealizedPnl >= 0 ? '+' : ''}₹{unrealizedPnl.toFixed(2)}
             </p>
           </div>
@@ -490,40 +651,30 @@ const Terminal = ({ marketData, onOrder, positions }) => {
   );
 };
 
+// ─── Portfolio ────────────────────────────────────────────────────────────────
+
 const Portfolio = ({ orders, balance, marketData, positions, onSquareOff }) => {
   const [squaringOff, setSquaringOff] = useState({});
 
-  const holdings = useMemo(() => {
-    return Object.entries(positions)
+  const holdings = useMemo(() =>
+    Object.entries(positions)
       .filter(([, v]) => v.qty !== 0)
-      .map(([symbol, v]) => ({ symbol, ...v }));
-  }, [positions]);
+      .map(([symbol, v]) => ({ symbol, ...v })),
+    [positions]
+  );
 
   const handleSquareOff = async (symbol, price) => {
     setSquaringOff(prev => ({ ...prev, [symbol]: true }));
-    try {
-      await onSquareOff?.(symbol, price);
-    } finally {
-      setSquaringOff(prev => ({ ...prev, [symbol]: false }));
-    }
+    try { await onSquareOff?.(symbol, price); }
+    finally { setSquaringOff(prev => ({ ...prev, [symbol]: false })); }
   };
 
-  const totalInvested = useMemo(() =>
-    holdings.reduce((sum, h) => sum + Math.abs(h.totalCost), 0),
-    [holdings]
-  );
-
-  const reEntries = useMemo(() =>
-    orders.filter(o => o.status === 'SQUARED_OFF').length,
-    [orders]
-  );
-
-  const totalPnl = useMemo(() => {
-    return holdings.reduce((sum, h) => {
-      const ltp = marketData.find(m => m.symbol === h.symbol)?.price || h.avgPrice;
-      return sum + (ltp - h.avgPrice) * h.qty;
-    }, 0);
-  }, [holdings, marketData]);
+  const totalInvested = useMemo(() => holdings.reduce((sum, h) => sum + Math.abs(h.totalCost), 0), [holdings]);
+  const reEntries = useMemo(() => orders.filter(o => o.status === 'SQUARED_OFF').length, [orders]);
+  const totalPnl = useMemo(() => holdings.reduce((sum, h) => {
+    const ltp = marketData.find(m => m.symbol === h.symbol)?.price || h.avgPrice;
+    return sum + (ltp - h.avgPrice) * h.qty;
+  }, 0), [holdings, marketData]);
 
   return (
     <div className="max-w-6xl mx-auto space-y-8">
@@ -566,9 +717,7 @@ const Portfolio = ({ orders, balance, marketData, positions, onSquareOff }) => {
             <tbody className="divide-y divide-slate-50">
               {holdings.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="px-8 py-16 text-center text-slate-300 font-bold italic">
-                    No active trades in system.
-                  </td>
+                  <td colSpan="6" className="px-8 py-16 text-center text-slate-300 font-bold italic">No active trades in system.</td>
                 </tr>
               ) : holdings.map(({ symbol, qty, avgPrice }) => {
                 const ltp = marketData.find(m => m.symbol === symbol)?.price || avgPrice;
@@ -605,6 +754,8 @@ const Portfolio = ({ orders, balance, marketData, positions, onSquareOff }) => {
   );
 };
 
+// ─── OrderHistory ─────────────────────────────────────────────────────────────
+
 const OrderHistory = ({ orders }) => (
   <div className="max-w-6xl mx-auto bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
     <div className="p-8 border-b border-slate-100">
@@ -624,23 +775,15 @@ const OrderHistory = ({ orders }) => (
         <tbody className="divide-y divide-slate-100">
           {orders.length === 0 ? (
             <tr>
-              <td colSpan="5" className="px-8 py-16 text-center text-slate-300 font-bold italic">
-                No orders placed yet.
-              </td>
+              <td colSpan="5" className="px-8 py-16 text-center text-slate-300 font-bold italic">No orders placed yet.</td>
             </tr>
           ) : orders.map(o => (
             <tr key={o.id} className="group hover:bg-slate-50/50 transition-all">
-              <td className="px-8 py-4 text-slate-400 font-mono text-xs">
-                {new Date(o.time).toLocaleTimeString('en-IN')}
-              </td>
+              <td className="px-8 py-4 text-slate-400 font-mono text-xs">{new Date(o.time).toLocaleTimeString('en-IN')}</td>
               <td className="px-8 py-4">
                 <span className={`px-3 py-1 rounded-full text-[10px] font-black ${
-                  o.type === 'CALL' || o.type === 'BUY'
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : 'bg-rose-100 text-rose-700'
-                }`}>
-                  {o.type}
-                </span>
+                  o.type === 'CALL' || o.type === 'BUY' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                }`}>{o.type}</span>
               </td>
               <td className="px-8 py-4 font-bold text-slate-700">{o.symbol}</td>
               <td className="px-8 py-4 text-right font-mono font-bold">₹{o.price}</td>
@@ -657,16 +800,15 @@ const OrderHistory = ({ orders }) => (
   </div>
 );
 
+// ─── MarketInsights ───────────────────────────────────────────────────────────
+
 const MarketInsights = () => {
   const [insight, setInsight] = useState("");
   const [loading, setLoading] = useState(false);
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
   const analyze = async () => {
-    if (!apiKey) {
-      setInsight("Set VITE_GEMINI_API_KEY in .env.local to enable AI insights.");
-      return;
-    }
+    if (!apiKey) { setInsight("Set VITE_GEMINI_API_KEY in .env.local to enable AI insights."); return; }
     setLoading(true);
     try {
       const response = await fetch(
@@ -681,11 +823,8 @@ const MarketInsights = () => {
       );
       const data = await response.json();
       setInsight(data.candidates?.[0]?.content?.parts?.[0]?.text || "No data available.");
-    } catch (e) {
-      setInsight("Failed to fetch insights. Check API key.");
-    } finally {
-      setLoading(false);
-    }
+    } catch { setInsight("Failed to fetch insights. Check API key."); }
+    finally { setLoading(false); }
   };
 
   return (
@@ -706,7 +845,6 @@ const MarketInsights = () => {
           {loading ? <><Loader2 size={18} className="animate-spin" /> Synthesizing...</> : 'Generate Neo Insights'}
         </button>
       </div>
-
       {insight && (
         <div className="bg-white p-8 rounded-[2rem] border border-slate-200 shadow-sm">
           <div className="flex items-center gap-2 mb-4 text-indigo-600 font-black text-xs uppercase tracking-widest">

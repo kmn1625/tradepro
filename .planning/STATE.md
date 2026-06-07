@@ -2,14 +2,16 @@
 
 ## Current Position
 
-- **Phase:** 01-foundation
-- **Current Plan:** 05
-- **Status:** In Progress
+- **Phase:** 03-signals-ai
+- **Current Plan:** 03
+- **Status:** Complete
 
 ## Progress
 
 ```
-Phase 1: [#####-----] 4/8 plans complete (P1-R01, P1-R02, P1-R03, P1-R04, P1-R05, P1-R06, P1-R07, P1-R08 done)
+Phase 1: [##########] 5/5 plans complete — DONE
+Phase 2: [########--] 8/9 plans complete (02-08 Monte Carlo = optional/deferred)
+Phase 3: [######----] 4/6 plans complete (P3-R01 schema + P3-R02 evaluator + P3-R03 indicators + P3-R04/05 pre-built + P3-R06 engine)
 ```
 
 ## Completed Plans
@@ -20,6 +22,12 @@ Phase 1: [#####-----] 4/8 plans complete (P1-R01, P1-R02, P1-R03, P1-R04, P1-R05
 | 01-02 | VirtualPortfolio Paper Trading Engine | f525687, b366e2e | 2026-05-28 |
 | 01-03 | Webhook Signal Ingestion Pipeline | 92a5915, 0b6dd8b | 2026-05-28 |
 | 01-04 | Paper Trading UI + Signal Log | 85a4cdc, 7113251 | 2026-05-28 |
+| 01-05 | Signal-to-Strategy Registry | — | 2026-06-06 |
+| 02-01 | Option Chain API + Expiry Selector | — | 2026-06-07 |
+| 02-02 | Leg Builder UI (pre-existing) | — | pre-built |
+| 02-03 | Black-Scholes Greeks per Leg (pre-existing) | — | pre-built |
+| 02-04 | Net Portfolio Greeks Display (pre-existing) | — | pre-built |
+| 02-05 | Payoff Graph (pre-existing) | — | pre-built |
 
 ## Decisions Made
 

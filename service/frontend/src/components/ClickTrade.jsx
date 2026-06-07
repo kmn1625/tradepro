@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { Plus, Trash2, Zap } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Plus, Trash2, Zap, Download } from 'lucide-react';
 import * as greeks from 'greeks';
 import OptionChain from './OptionChain';
 import PayoffGraph from './PayoffGraph';
@@ -21,9 +21,28 @@ const getDTE = () => {
   return Math.max((expiry - now) / (365 * 24 * 60 * 60 * 1000), 1 / 365);
 };
 
-const calcLegGreeks = (leg, spot) => {
-  const t   = getDTE();
-  const iv  = (leg.iv || 15) / 100;
+// Black-Scholes option price — Abramowitz & Stegun normal CDF approximation.
+// Used for scenario P&L (pre-expiry value under shifted spot/IV/DTE).
+function bsPrice(S, K, T, sigma, r, type) {
+  if (T <= 0 || sigma <= 0 || S <= 0 || K <= 0) return 0;
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
+  const d2 = d1 - sigma * sqrtT;
+  const N = (x) => {
+    const a = [0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429];
+    const p = 0.3275911;
+    const sign = x < 0 ? -1 : 1;
+    const t = 1 / (1 + p * Math.abs(x));
+    const poly = ((((a[4] * t + a[3]) * t + a[2]) * t + a[1]) * t + a[0]) * t;
+    return 0.5 * (1 + sign * (1 - poly * Math.exp(-x * x / 2)));
+  };
+  if (type === 'call') return Math.max(S * N(d1) - K * Math.exp(-r * T) * N(d2), 0);
+  return Math.max(K * Math.exp(-r * T) * N(-d2) - S * N(-d1), 0);
+}
+
+const calcLegGreeks = (leg, spot, ivMult = 1, dte = null) => {
+  const t   = dte !== null ? dte : getDTE();
+  const iv  = Math.max((leg.iv || 15) / 100 * ivMult, 0.01);
   const dir = leg.side === 'BUY' ? 1 : -1;
   const cp  = leg.type === 'CE' ? 'call' : 'put';
   try {
@@ -38,17 +57,54 @@ const calcLegGreeks = (leg, spot) => {
   }
 };
 
-// ClickTrade — visual multi-leg options strategy builder.
-// Build legs from option chain clicks or manual input.
-// Shows payoff graph + Greeks per leg + execute all legs.
 const ClickTrade = () => {
-  const [underlying, setUnderlying]   = useState('NIFTY');
-  const [legs, setLegs]               = useState([]);
-  const [spot, setSpot]               = useState(22500);
-  const [executing, setExecuting]     = useState(false);
-  const [execResult, setExecResult]   = useState(null);
+  const [underlying, setUnderlying]           = useState('NIFTY');
+  const [expiry, setExpiry]                   = useState('');
+  const [expiries, setExpiries]               = useState([]);
+  const [legs, setLegs]                       = useState([]);
+  const [spot, setSpot]                       = useState(22500);
+  const [executing, setExecuting]             = useState(false);
+  const [execResult, setExecResult]           = useState(null);
+  const [scenarioSpotPct, setScenarioSpotPct] = useState(0);
+  const [scenarioIVPct, setScenarioIVPct]     = useState(0);
+  const [scenarioDaysFwd, setScenarioDaysFwd] = useState(0);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/options/expiries?symbol=${underlying}`)
+      .then(r => r.json())
+      .then(data => {
+        const list = data.expiries || [];
+        setExpiries(list);
+        setExpiry(list[0] || '');
+      })
+      .catch(() => {});
+  }, [underlying]);
 
   const lotSize = LOT_SIZES[underlying] || 50;
+
+  // Effective scenario values (derived from state, cheap to recompute each render)
+  const scenarioSpot   = spot * (1 + scenarioSpotPct / 100);
+  const scenarioIVMult = Math.max(1 + scenarioIVPct / 100, 0.01);
+  const scenarioDTE    = Math.max(getDTE() - scenarioDaysFwd / 365, 1 / 365);
+
+  const netPremium = legs.reduce((sum, l) => {
+    return sum + (l.side === 'BUY' ? -1 : 1) * l.ltp * l.lots * lotSize;
+  }, 0);
+
+  // Pre-expiry scenario P&L using Black-Scholes repricing under shifted spot/IV/DTE
+  const scenarioPnL = useMemo(() => {
+    if (!legs.length) return null;
+    const effSpot   = spot * (1 + scenarioSpotPct / 100);
+    const effIVMult = Math.max(1 + scenarioIVPct / 100, 0.01);
+    const effDTE    = Math.max(getDTE() - scenarioDaysFwd / 365, 1 / 365);
+    return legs.reduce((sum, leg) => {
+      const cpType = leg.type === 'CE' ? 'call' : 'put';
+      const scIV   = Math.max((leg.iv || 15) / 100 * effIVMult, 0.01);
+      const scenarioPrice = bsPrice(effSpot, leg.strike, effDTE, scIV, RF_RATE, cpType);
+      const dir    = leg.side === 'BUY' ? 1 : -1;
+      return sum + dir * (scenarioPrice - leg.ltp) * leg.lots * lotSize;
+    }, 0);
+  }, [legs, spot, scenarioSpotPct, scenarioIVPct, scenarioDaysFwd, lotSize]);
 
   const addLeg = (preset = {}) => {
     setLegs(prev => [...prev, {
@@ -70,20 +126,32 @@ const ClickTrade = () => {
     setLegs(prev => prev.filter(l => l.id !== id));
   };
 
-  const netPremium = legs.reduce((sum, l) => {
-    return sum + (l.side === 'BUY' ? -1 : 1) * l.ltp * l.lots * lotSize;
-  }, 0);
-
   const executeAll = async () => {
     if (!legs.length) return;
     setExecuting(true);
     setExecResult(null);
     try {
-      // TODO: integrate Kotak order placement
-      // Each leg → POST /api/market/order { symbol, side, type, strike, expiry, lots }
-      // For now simulate
-      await new Promise(r => setTimeout(r, 800));
-      setExecResult({ status: 'ok', message: `${legs.length} leg(s) queued — broker integration pending` });
+      const results = await Promise.all(legs.map(leg =>
+        fetch(`${API_BASE}/api/market/order`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            symbol: underlying,
+            side:   leg.side,
+            type:   leg.type,
+            strike: leg.strike,
+            expiry,
+            lots:   leg.lots,
+            ltp:    leg.ltp,
+          }),
+        }).then(r => r.json())
+      ));
+      const failed = results.filter(r => r.status === 'error');
+      setExecResult(
+        failed.length
+          ? { status: 'error', message: `${failed.length} leg(s) failed to place` }
+          : { status: 'ok', message: `${legs.length} leg(s) placed — ${results[0]?.mode || 'simulated'}` }
+      );
     } catch (err) {
       setExecResult({ status: 'error', message: err.message });
     } finally {
@@ -91,12 +159,28 @@ const ClickTrade = () => {
     }
   };
 
+  const exportStrategy = () => {
+    const data = {
+      underlying, expiry, spot,
+      legs: legs.map(({ id, ...l }) => l),
+      netPremium,
+      exported: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `strategy-${underlying}-${expiry || 'draft'}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      {/* Header + underlying selector */}
+      {/* Header + underlying selector + expiry + export */}
       <div className="flex items-center gap-4">
         <h2 className="text-2xl font-black text-slate-800">ClickTrade Strategy Builder</h2>
-        <div className="flex gap-2 ml-auto">
+        <div className="flex items-center gap-2 ml-auto flex-wrap">
           {UNDERLYINGS.map(u => (
             <button
               key={u}
@@ -106,12 +190,31 @@ const ClickTrade = () => {
               }`}
             >{u}</button>
           ))}
+          {expiries.length > 0 && (
+            <select
+              value={expiry}
+              onChange={e => setExpiry(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+            >
+              {expiries.map(e => (
+                <option key={e} value={e}>{e}</option>
+              ))}
+            </select>
+          )}
+          {legs.length > 0 && (
+            <button
+              onClick={exportStrategy}
+              className="flex items-center gap-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 px-3 py-2 rounded-xl text-sm font-bold transition-all"
+            >
+              <Download size={13} /> Export
+            </button>
+          )}
         </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Option chain */}
-        <OptionChain symbol={underlying} onLegSelect={addLeg} onSpotLoad={setSpot} />
+        <OptionChain symbol={underlying} expiry={expiry} onLegSelect={addLeg} onSpotLoad={setSpot} />
 
         {/* Leg builder + controls */}
         <div className="space-y-4">
@@ -181,7 +284,9 @@ const ClickTrade = () => {
 
           {execResult && (
             <div className={`rounded-2xl border p-4 text-sm font-bold ${
-              execResult.status === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'
+              execResult.status === 'ok'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-rose-200 bg-rose-50 text-rose-700'
             }`}>
               {execResult.message}
             </div>
@@ -189,11 +294,36 @@ const ClickTrade = () => {
         </div>
       </div>
 
-      {/* Greeks table */}
-      {legs.length > 0 && <GreeksTable legs={legs} spot={spot} lotSize={lotSize} />}
+      {/* Scenario analysis — sliders for spot move %, IV change %, days forward */}
+      {legs.length > 0 && (
+        <ScenarioPanel
+          spot={spot}
+          scenarioSpotPct={scenarioSpotPct}   setScenarioSpotPct={setScenarioSpotPct}
+          scenarioIVPct={scenarioIVPct}       setScenarioIVPct={setScenarioIVPct}
+          scenarioDaysFwd={scenarioDaysFwd}   setScenarioDaysFwd={setScenarioDaysFwd}
+          scenarioPnL={scenarioPnL}
+          scenarioSpot={scenarioSpot}
+        />
+      )}
 
-      {/* Payoff graph */}
-      <PayoffGraph legs={legs} lotSize={lotSize} />
+      {/* Greeks table — uses scenario spot/IV/DTE so sliders update it live */}
+      {legs.length > 0 && (
+        <GreeksTable
+          legs={legs}
+          spot={scenarioSpot}
+          lotSize={lotSize}
+          ivMult={scenarioIVMult}
+          dte={scenarioDTE}
+        />
+      )}
+
+      {/* Payoff graph — scenario spot shown as second reference line */}
+      <PayoffGraph
+        legs={legs}
+        spot={spot}
+        lotSize={lotSize}
+        scenarioSpot={scenarioSpotPct !== 0 ? scenarioSpot : undefined}
+      />
     </div>
   );
 };
@@ -204,9 +334,92 @@ const fmt = (v, d = 2) => {
 };
 const fmtColor = v => isNaN(v) || !isFinite(v) ? 'text-slate-400' : v >= 0 ? 'text-emerald-600' : 'text-rose-600';
 
-const GreeksTable = ({ legs, spot, lotSize }) => {
+const ScenarioPanel = ({
+  spot,
+  scenarioSpotPct, setScenarioSpotPct,
+  scenarioIVPct,   setScenarioIVPct,
+  scenarioDaysFwd, setScenarioDaysFwd,
+  scenarioPnL,     scenarioSpot,
+}) => {
+  const hasScenario = scenarioSpotPct !== 0 || scenarioIVPct !== 0 || scenarioDaysFwd !== 0;
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+      <div className="flex items-center justify-between mb-4">
+        <span className="font-black text-slate-800 text-sm uppercase tracking-widest">Scenario Analysis</span>
+        {hasScenario && (
+          <button
+            onClick={() => { setScenarioSpotPct(0); setScenarioIVPct(0); setScenarioDaysFwd(0); }}
+            className="text-xs text-indigo-500 hover:text-indigo-700 font-bold transition-colors"
+          >Reset</button>
+        )}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Spot move slider */}
+        <div>
+          <div className="flex justify-between text-xs font-bold text-slate-600 mb-1.5">
+            <span>Spot Move</span>
+            <span className={`font-mono ${scenarioSpotPct > 0 ? 'text-emerald-600' : scenarioSpotPct < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+              {scenarioSpotPct >= 0 ? '+' : ''}{scenarioSpotPct}% → ₹{Math.round(scenarioSpot).toLocaleString('en-IN')}
+            </span>
+          </div>
+          <input
+            type="range" min="-20" max="20" step="0.5" value={scenarioSpotPct}
+            onChange={e => setScenarioSpotPct(Number(e.target.value))}
+            className="w-full accent-indigo-600 cursor-pointer"
+          />
+          <div className="flex justify-between text-[10px] text-slate-300 mt-0.5"><span>-20%</span><span>+20%</span></div>
+        </div>
+
+        {/* IV change slider */}
+        <div>
+          <div className="flex justify-between text-xs font-bold text-slate-600 mb-1.5">
+            <span>IV Change</span>
+            <span className={`font-mono ${scenarioIVPct > 0 ? 'text-amber-600' : scenarioIVPct < 0 ? 'text-blue-600' : 'text-slate-500'}`}>
+              {scenarioIVPct >= 0 ? '+' : ''}{scenarioIVPct}%
+            </span>
+          </div>
+          <input
+            type="range" min="-50" max="100" step="5" value={scenarioIVPct}
+            onChange={e => setScenarioIVPct(Number(e.target.value))}
+            className="w-full accent-amber-500 cursor-pointer"
+          />
+          <div className="flex justify-between text-[10px] text-slate-300 mt-0.5"><span>-50%</span><span>+100%</span></div>
+        </div>
+
+        {/* Days forward slider */}
+        <div>
+          <div className="flex justify-between text-xs font-bold text-slate-600 mb-1.5">
+            <span>Days Forward</span>
+            <span className="font-mono text-slate-700">{scenarioDaysFwd}d</span>
+          </div>
+          <input
+            type="range" min="0" max="30" step="1" value={scenarioDaysFwd}
+            onChange={e => setScenarioDaysFwd(Number(e.target.value))}
+            className="w-full accent-slate-500 cursor-pointer"
+          />
+          <div className="flex justify-between text-[10px] text-slate-300 mt-0.5"><span>Today</span><span>30d</span></div>
+        </div>
+      </div>
+
+      {scenarioPnL !== null && hasScenario && (
+        <div className={`mt-4 rounded-xl px-4 py-3 flex items-center justify-between ${
+          scenarioPnL >= 0
+            ? 'bg-emerald-50 border border-emerald-100 text-emerald-700'
+            : 'bg-rose-50 border border-rose-100 text-rose-700'
+        }`}>
+          <span className="text-xs font-black uppercase tracking-wide">Scenario P&L vs current</span>
+          <span className="font-mono font-black text-base">
+            {scenarioPnL >= 0 ? '+' : ''}₹{Math.round(scenarioPnL).toLocaleString('en-IN')}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const GreeksTable = ({ legs, spot, lotSize, ivMult = 1, dte = null }) => {
   const rows = useMemo(() => legs.map(leg => {
-    const g = calcLegGreeks(leg, spot);
+    const g = calcLegGreeks(leg, spot, ivMult, dte);
     const n = leg.lots * lotSize;
     return {
       label: `${leg.side} ${leg.type} ${leg.strike}`,
@@ -215,7 +428,7 @@ const GreeksTable = ({ legs, spot, lotSize }) => {
       gamma: g.gamma * n,
       vega:  g.vega  * n,
     };
-  }), [legs, spot, lotSize]);
+  }), [legs, spot, lotSize, ivMult, dte]);
 
   const net = rows.reduce(
     (acc, r) => ({ delta: acc.delta + r.delta, theta: acc.theta + r.theta, gamma: acc.gamma + r.gamma, vega: acc.vega + r.vega }),

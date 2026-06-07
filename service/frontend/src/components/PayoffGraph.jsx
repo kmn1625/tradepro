@@ -5,10 +5,10 @@ import {
 
 // Payoff graph — P&L at expiry vs underlying price.
 // legs: [{ side: 'BUY'|'SELL', type: 'CE'|'PE', strike: number, ltp: number, lots: number }]
-// spot: current underlying price
+// spot: current underlying price (indigo reference line)
+// scenarioSpot: optional — scenario shifted spot (amber dashed reference line)
 // lotSize: 50 for NIFTY, 15 for BANKNIFTY
-// TODO: npm install recharts in frontend
-const PayoffGraph = ({ legs = [], spot = 22500, lotSize = 50 }) => {
+const PayoffGraph = ({ legs = [], spot = 22500, lotSize = 50, scenarioSpot }) => {
   const data = useMemo(() => {
     if (!legs.length) return [];
     const low  = spot * 0.85;
@@ -44,9 +44,23 @@ const PayoffGraph = ({ legs = [], spot = 22500, lotSize = 50 }) => {
     );
   }
 
+  const showScenario = scenarioSpot !== undefined && scenarioSpot !== null && Math.round(scenarioSpot) !== Math.round(spot);
+
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-      <h3 className="font-black text-slate-800 mb-4 text-sm uppercase tracking-widest">Payoff at Expiry</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-black text-slate-800 text-sm uppercase tracking-widest">Payoff at Expiry</h3>
+        {showScenario && (
+          <div className="flex items-center gap-4 text-[10px] font-bold text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-4 h-0.5 bg-indigo-500" />Spot
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-4 h-0.5 bg-amber-400 border-dashed border-t-2 border-amber-400" />Scenario
+            </span>
+          </div>
+        )}
+      </div>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
@@ -58,6 +72,14 @@ const PayoffGraph = ({ legs = [], spot = 22500, lotSize = 50 }) => {
             contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 12 }}
           />
           <ReferenceLine x={spot} stroke="#6366f1" strokeDasharray="4 4" label={{ value: 'Spot', fill: '#6366f1', fontSize: 10 }} />
+          {showScenario && (
+            <ReferenceLine
+              x={Math.round(scenarioSpot)}
+              stroke="#f59e0b"
+              strokeDasharray="6 3"
+              label={{ value: 'Scenario', fill: '#d97706', fontSize: 10 }}
+            />
+          )}
           <ReferenceLine y={0} stroke="#94a3b8" />
           <Line
             type="monotone" dataKey="pnl"

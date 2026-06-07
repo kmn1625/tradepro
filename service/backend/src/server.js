@@ -48,6 +48,14 @@ try {
 }
 
 try {
+  const strategiesRoutes = require('./routes/strategies.routes');
+  app.use('/api/strategies', strategiesRoutes);
+  console.log('Strategies routes loaded');
+} catch (err) {
+  console.error('Failed to load strategies routes:', err.message);
+}
+
+try {
   const optionsRoutes = require('./routes/options.routes');
   app.use('/api/options', optionsRoutes);
   console.log('Options routes loaded');
@@ -69,6 +77,14 @@ try {
   console.log('AI routes loaded');
 } catch (err) {
   console.error('Failed to load AI routes:', err.message);
+}
+
+try {
+  const algoRoutes = require('./routes/algo.routes');
+  app.use('/api/algo', algoRoutes);
+  console.log('Algo routes loaded');
+} catch (err) {
+  console.error('Failed to load algo routes:', err.message);
 }
 
 /* =========================
@@ -102,7 +118,7 @@ const wss = new WebSocket.Server({ server });
 const marketDataService = require("./services/marketData.service");
 
 function broadcast(data) {
-  const msg = JSON.stringify(data);
+  const msg = typeof data === 'string' ? data : JSON.stringify(data);
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(msg);
@@ -114,6 +130,20 @@ wss.on("connection", (ws) => {
   console.log("WebSocket client connected");
 
   ws.send(JSON.stringify({ type: "CONNECTED", message: "WebSocket connection established" }));
+
+  ws.on("message", (data) => {
+    let msg;
+    try { msg = JSON.parse(data.toString()); } catch { return; }
+
+    if (msg.type === 'SUBSCRIBE_SYMBOLS' && Array.isArray(msg.symbols)) {
+      kotakFeedService.addSymbols(msg.symbols);
+    } else if (msg.type === 'GET_DEPTH' && msg.symbol) {
+      const depth = marketDataService.getMarketDepth(msg.symbol);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'DEPTH_UPDATE', ...depth }));
+      }
+    }
+  });
 
   ws.on("close", () => console.log("WebSocket client disconnected"));
   ws.on("error", (err) => console.error("WebSocket error:", err));

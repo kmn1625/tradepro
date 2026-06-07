@@ -1,5 +1,5 @@
 'use strict';
-const { getFirestore } = require('../config/firebase.admin');
+const { getFirestore, admin } = require('../config/firebase.admin');
 const { VirtualPortfolio } = require('../services/virtualPortfolio.service');
 const marketDataService = require('../services/marketData.service');
 
@@ -64,9 +64,6 @@ async function _logSignal(logEntry) {
     return null;
   }
 }
-
-// Lazy-require admin so _logSignal can access FieldValue without circular dep
-const { admin } = require('../config/firebase.admin');
 
 // ---------------------------------------------------------------------------
 // Handler: POST /api/signals/tradingview
