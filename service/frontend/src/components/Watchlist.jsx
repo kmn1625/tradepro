@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Star, X, Plus, Search, GripVertical, Check } from 'lucide-react';
+import OrderTicket from './OrderTicket';
 
 const DEFAULT_WATCHLIST = {
   id: 'default',
@@ -63,6 +64,7 @@ export default function Watchlist({ marketDataMap, onSymbolSelect, selectedSymbo
   const [editName, setEditName] = useState('');
   const [dragIdx, setDragIdx] = useState(null);
   const [dragOverIdx, setDragOverIdx] = useState(null);
+  const [quickOrder, setQuickOrder] = useState(null); // { symbol, ltp, initialSide }
   const searchTimer = useRef(null);
   const searchRef = useRef(null);
 
@@ -262,6 +264,25 @@ export default function Watchlist({ marketDataMap, onSymbolSelect, selectedSymbo
         )}
       </div>
 
+      {/* Quick order modal */}
+      {quickOrder && (
+        <div
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setQuickOrder(null)}
+        >
+          <div onClick={e => e.stopPropagation()}>
+            <OrderTicket
+              symbol={quickOrder.symbol}
+              ltp={quickOrder.ltp}
+              initialSide={quickOrder.initialSide}
+              showBulk={false}
+              onClose={() => setQuickOrder(null)}
+              onSuccess={() => setTimeout(() => setQuickOrder(null), 1500)}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Symbol rows */}
       <div className="max-h-[420px] overflow-y-auto">
         {symbols.length === 0 ? (
@@ -285,7 +306,7 @@ export default function Watchlist({ marketDataMap, onSymbolSelect, selectedSymbo
               onDrop={(e) => handleDrop(e, idx)}
               onDragEnd={handleDragEnd}
               onClick={() => onSymbolSelect?.(s.symbol)}
-              className={`flex items-center gap-2 px-3 py-3 border-b border-slate-50 cursor-pointer transition-all select-none ${
+              className={`group flex items-center gap-2 px-3 py-3 border-b border-slate-50 cursor-pointer transition-all select-none ${
                 isSelected ? 'bg-indigo-50/50 border-l-4 border-l-indigo-600' : 'hover:bg-slate-50'
               } ${dragIdx === idx ? 'opacity-40' : ''} ${dragOverIdx === idx && dragIdx !== idx ? 'border-t-2 border-t-indigo-400' : ''}`}
             >
@@ -310,7 +331,19 @@ export default function Watchlist({ marketDataMap, onSymbolSelect, selectedSymbo
                 </p>
               </div>
 
-              <div className="text-right flex-shrink-0">
+              {/* Quick BUY/SELL — visible on hover, replaces price on hover via group */}
+              <div className="hidden group-hover:flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setQuickOrder({ symbol: s.symbol, ltp: price, initialSide: 'BUY' })}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-black px-2 py-1 rounded-lg transition-colors"
+                >B</button>
+                <button
+                  onClick={() => setQuickOrder({ symbol: s.symbol, ltp: price, initialSide: 'SELL' })}
+                  className="bg-rose-500 hover:bg-rose-600 text-white text-[10px] font-black px-2 py-1 rounded-lg transition-colors"
+                >S</button>
+              </div>
+
+              <div className="group-hover:hidden text-right flex-shrink-0">
                 <p className={`text-xs font-mono font-bold ${pct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                   {price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>

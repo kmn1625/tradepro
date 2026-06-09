@@ -13,7 +13,13 @@ router.post('/indicators', marketController.getIndicators.bind(marketController)
 router.post('/indicators/multi', marketController.getMultipleIndicators.bind(marketController));
 router.post('/signals', marketController.getSignals.bind(marketController));
 
-// POST /api/market/order — place options leg via Kotak Neo (or paper simulation)
-router.post('/order', marketController.placeOrder.bind(marketController));
+// Order management (M1/M2/M3/M4) + basket (M18) + bulk
+router.post  ('/order',         marketController.placeOrder.bind(marketController));
+router.post  ('/basket',        marketController.placeBasketOrder.bind(marketController));
+router.post  ('/bulk',          marketController.placeBulkOrder.bind(marketController));
+router.get   ('/orders',        marketController.listOrders.bind(marketController));
+router.get   ('/order/:orderId',marketController.getOrderStatus.bind(marketController));
+router.delete('/order/:orderId',marketController.cancelOrder.bind(marketController));
+router.patch ('/order/:orderId',marketController.modifyOrder.bind(marketController));
 
 module.exports = router;

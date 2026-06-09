@@ -6,48 +6,48 @@ beforeEach(() => {
   svc.candles = {};
   svc.partialCandle = {};
   svc.lastPrice = {
-    'NIFTY 50': 22453.20,
-    'BANK NIFTY': 47285.10,
-    'GOLD': 62450.00,
-    'CRUDEOIL': 6450.00,
+    'NIFTY 50 (Index)': 22453.20,
+    'BANK NIFTY (Index)': 47285.10,
+    'GOLD (MCX)': 62450.00,
+    'CRUDEOIL (MCX)': 6450.00,
   };
 });
 
 describe('_normalizeSymbol()', () => {
-  test('maps NIFTY variant to "NIFTY 50"', () => {
-    expect(svc._normalizeSymbol('NIFTY')).toBe('NIFTY 50');
-    expect(svc._normalizeSymbol('nifty50')).toBe('NIFTY 50');
+  test('maps NIFTY variant to "NIFTY 50 (Index)"', () => {
+    expect(svc._normalizeSymbol('NIFTY')).toBe('NIFTY 50 (Index)');
+    expect(svc._normalizeSymbol('nifty50')).toBe('NIFTY 50 (Index)');
   });
 
-  test('maps BANK variant to "BANK NIFTY"', () => {
-    expect(svc._normalizeSymbol('BANKNIFTY')).toBe('BANK NIFTY');
-    expect(svc._normalizeSymbol('bank nifty')).toBe('BANK NIFTY');
+  test('maps BANK variant to "BANK NIFTY (Index)"', () => {
+    expect(svc._normalizeSymbol('BANKNIFTY')).toBe('BANK NIFTY (Index)');
+    expect(svc._normalizeSymbol('bank nifty')).toBe('BANK NIFTY (Index)');
   });
 
-  test('null/undefined returns "NIFTY 50"', () => {
-    expect(svc._normalizeSymbol(null)).toBe('NIFTY 50');
-    expect(svc._normalizeSymbol(undefined)).toBe('NIFTY 50');
+  test('null/undefined returns "NIFTY 50 (Index)"', () => {
+    expect(svc._normalizeSymbol(null)).toBe('NIFTY 50 (Index)');
+    expect(svc._normalizeSymbol(undefined)).toBe('NIFTY 50 (Index)');
   });
 
-  test('GOLD maps to "GOLD"', () => {
-    expect(svc._normalizeSymbol('GOLD')).toBe('GOLD');
+  test('GOLD maps to "GOLD (MCX)"', () => {
+    expect(svc._normalizeSymbol('GOLD')).toBe('GOLD (MCX)');
   });
 });
 
 describe('processTick()', () => {
   test('creates partial candle for both 1m and 5m on first tick', () => {
     const now = Date.now();
-    svc.processTick('NIFTY 50', 22500, now);
-    expect(svc.partialCandle['NIFTY 50']['1m'].open).toBe(22500);
-    expect(svc.partialCandle['NIFTY 50']['5m'].open).toBe(22500);
+    svc.processTick('NIFTY 50 (Index)', 22500, now);
+    expect(svc.partialCandle['NIFTY 50 (Index)']['1m'].open).toBe(22500);
+    expect(svc.partialCandle['NIFTY 50 (Index)']['5m'].open).toBe(22500);
   });
 
   test('updates high/low/close on ticks within same minute', () => {
     const ts = Math.floor(Date.now() / 60000) * 60000;
-    svc.processTick('NIFTY 50', 22500, ts + 1000);
-    svc.processTick('NIFTY 50', 22600, ts + 2000);
-    svc.processTick('NIFTY 50', 22400, ts + 3000);
-    const c = svc.partialCandle['NIFTY 50']['1m'];
+    svc.processTick('NIFTY 50 (Index)', 22500, ts + 1000);
+    svc.processTick('NIFTY 50 (Index)', 22600, ts + 2000);
+    svc.processTick('NIFTY 50 (Index)', 22400, ts + 3000);
+    const c = svc.partialCandle['NIFTY 50 (Index)']['1m'];
     expect(c.high).toBe(22600);
     expect(c.low).toBe(22400);
     expect(c.close).toBe(22400);
@@ -55,15 +55,15 @@ describe('processTick()', () => {
 
   test('seals candle when new minute starts', () => {
     const ts = Math.floor(Date.now() / 60000) * 60000;
-    svc.processTick('NIFTY 50', 22500, ts);
-    svc.processTick('NIFTY 50', 22600, ts + 60000);
-    expect(svc.candles['NIFTY 50']['1m']).toHaveLength(1);
-    expect(svc.candles['NIFTY 50']['1m'][0].close).toBe(22500);
+    svc.processTick('NIFTY 50 (Index)', 22500, ts);
+    svc.processTick('NIFTY 50 (Index)', 22600, ts + 60000);
+    expect(svc.candles['NIFTY 50 (Index)']['1m']).toHaveLength(1);
+    expect(svc.candles['NIFTY 50 (Index)']['1m'][0].close).toBe(22500);
   });
 
   test('updates lastPrice on each tick', () => {
-    svc.processTick('NIFTY 50', 23000, Date.now());
-    expect(svc.lastPrice['NIFTY 50']).toBe(23000);
+    svc.processTick('NIFTY 50 (Index)', 23000, Date.now());
+    expect(svc.lastPrice['NIFTY 50 (Index)']).toBe(23000);
   });
 });
 
@@ -110,10 +110,10 @@ describe('calculateIndicator()', () => {
 
 describe('getLiveQuotes()', () => {
   test('returns success + price data for known symbols', async () => {
-    const result = await svc.getLiveQuotes(['NIFTY 50']);
+    const result = await svc.getLiveQuotes(['NIFTY 50 (Index)']);
     expect(result.success).toBe(true);
     expect(result.data).toHaveLength(1);
-    expect(result.data[0].symbol).toBe('NIFTY 50');
+    expect(result.data[0].symbol).toBe('NIFTY 50 (Index)');
     expect(typeof result.data[0].price).toBe('number');
   });
 

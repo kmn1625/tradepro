@@ -2,8 +2,8 @@
 
 ## Current Position
 
-- **Phase:** 03-signals-ai
-- **Current Plan:** 03
+- **Phase:** 05-backtest-engine
+- **Current Plan:** 05
 - **Status:** Complete
 
 ## Progress
@@ -11,7 +11,9 @@
 ```
 Phase 1: [##########] 5/5 plans complete — DONE
 Phase 2: [########--] 8/9 plans complete (02-08 Monte Carlo = optional/deferred)
-Phase 3: [######----] 4/6 plans complete (P3-R01 schema + P3-R02 evaluator + P3-R03 indicators + P3-R04/05 pre-built + P3-R06 engine)
+Phase 3: [##########] 6/6 plans complete — DONE
+Phase 4: [##########] 6/6 plans complete — DONE
+Phase 5: [##########] 8/8 plans complete — DONE
 ```
 
 ## Completed Plans

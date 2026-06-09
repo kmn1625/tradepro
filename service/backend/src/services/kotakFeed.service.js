@@ -7,9 +7,18 @@ const marketDataService = require('./marketData.service');
 const algoEngine = require('./algoEngine');
 
 const INSTRUMENT_TOKENS = {
-  'NIFTY 50 (Index)':   '26000',
-  'BANK NIFTY (Index)': '26009',
-  'FINNIFTY (Index)':   '26037',
+  'NIFTY 50 (Index)':       '26000',
+  'BANK NIFTY (Index)':     '26009',
+  'FINNIFTY (Index)':       '26037',
+  'MIDCPNIFTY (Index)':     '26074',
+  'SENSEX (Index)':         '1',
+  'BANKEX (Index)':         '26016',
+  'NIFTY IT (Index)':       '26012',
+  'INDIA VIX (Index)':      '26017',
+  'GOLD (MCX)':             '57495',
+  'CRUDEOIL (MCX)':         '57337',
+  'SILVER (MCX)':           '57560',
+  'NATURALGAS (MCX)':       '57329',
 };
 
 class KotakFeedService {
@@ -22,14 +31,19 @@ class KotakFeedService {
     this._mockInterval = null;
     this._mockPrices = null;
     this._mockVolumes = null;
+    this._mode = 'stopped';
   }
 
   startFeed(broadcastFn) {
     this._broadcastFn = broadcastFn;
     if (session.isAuthenticated()) {
+      this._mode = 'connecting-live';
+      this._broadcastStatus();
       this._connect();
     } else {
       console.warn('[KotakFeed] No Kotak session — starting mock price feed');
+      this._mode = 'mock';
+      this._broadcastStatus();
       this._startMockFeed();
     }
   }
@@ -40,10 +54,27 @@ class KotakFeedService {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     if (this._ws) { this._ws.terminate(); this._ws = null; }
     this._connected = false;
+    this._mode = 'stopped';
+    this._broadcastStatus();
+  }
+
+  getStatus() {
+    return {
+      type: 'FEED_STATUS',
+      mode: this._mode,
+      connected: this._connected,
+      liveEnabled: session.isAuthenticated(),
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  _broadcastStatus() {
+    if (this._broadcastFn) this._broadcastFn(this.getStatus());
   }
 
   // Add symbols dynamically (called when user adds to watchlist)
   addSymbols(symbolsArr) {
+    const newTokens = [];
     for (const s of symbolsArr) {
       if (!s || !s.symbol) continue;
       marketDataService.addSymbol(s.symbol, s.basePrice || 1000, s.type || 'NSE');
@@ -51,6 +82,13 @@ class KotakFeedService {
         this._mockPrices[s.symbol] = marketDataService.lastPrice[s.symbol];
         this._mockVolumes[s.symbol] = 0;
       }
+      // Register token if known, collect new ones for live subscription
+      const token = INSTRUMENT_TOKENS[s.symbol];
+      if (token) newTokens.push(token);
+    }
+    // Subscribe new tokens on live WS if connected
+    if (newTokens.length && this._ws && this._ws.readyState === 1 /* OPEN */) {
+      this._ws.send(JSON.stringify({ type: 'subscribe', tokens: newTokens }));
     }
   }
 
@@ -122,6 +160,8 @@ class KotakFeedService {
     ws.on('open', () => {
       console.log('[KotakFeed] Connected');
       this._connected = true;
+      this._mode = 'live';
+      this._broadcastStatus();
       this._subscribe();
       this._pingInterval = setInterval(() => {
         if (this._ws && this._ws.readyState === WebSocket.OPEN) this._ws.ping();
@@ -133,6 +173,8 @@ class KotakFeedService {
     ws.on('close', () => {
       console.log('[KotakFeed] Disconnected — reconnecting in 5s');
       this._connected = false;
+      this._mode = session.isAuthenticated() ? 'reconnecting-live' : 'mock';
+      this._broadcastStatus();
       if (this._pingInterval) { clearInterval(this._pingInterval); this._pingInterval = null; }
       this._scheduleReconnect();
     });

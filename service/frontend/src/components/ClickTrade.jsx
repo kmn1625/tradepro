@@ -7,7 +7,7 @@ import PayoffGraph from './PayoffGraph';
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 const UNDERLYINGS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
-const LOT_SIZES   = { NIFTY: 50, BANKNIFTY: 15, FINNIFTY: 40 };
+const LOT_SIZES   = { NIFTY: 65, BANKNIFTY: 30, FINNIFTY: 60 };
 const RF_RATE     = 0.065; // 6.5% risk-free rate
 
 // Returns nearest weekly expiry (Thursday 15:30 IST) as fraction of year from now
@@ -65,6 +65,7 @@ const ClickTrade = () => {
   const [spot, setSpot]                       = useState(22500);
   const [executing, setExecuting]             = useState(false);
   const [execResult, setExecResult]           = useState(null);
+  const [confirmState, setConfirmState]       = useState(null); // {preview:[]} awaiting live confirm
   const [scenarioSpotPct, setScenarioSpotPct] = useState(0);
   const [scenarioIVPct, setScenarioIVPct]     = useState(0);
   const [scenarioDaysFwd, setScenarioDaysFwd] = useState(0);
@@ -126,32 +127,61 @@ const ClickTrade = () => {
     setLegs(prev => prev.filter(l => l.id !== id));
   };
 
+  const _sendBasket = async (confirmLive = false) => {
+    const payload = {
+      legs: legs.map(leg => ({
+        symbol: underlying, side: leg.side, type: leg.type,
+        strike: leg.strike, expiry, lots: leg.lots, ltp: leg.ltp,
+      })),
+      confirmLive,
+      rollbackOnFail: true,
+    };
+    const res = await fetch(`${API_BASE}/api/market/basket`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return { status: res.status, data: await res.json() };
+  };
+
   const executeAll = async () => {
     if (!legs.length) return;
     setExecuting(true);
     setExecResult(null);
+    setConfirmState(null);
     try {
-      const results = await Promise.all(legs.map(leg =>
-        fetch(`${API_BASE}/api/market/order`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            symbol: underlying,
-            side:   leg.side,
-            type:   leg.type,
-            strike: leg.strike,
-            expiry,
-            lots:   leg.lots,
-            ltp:    leg.ltp,
-          }),
-        }).then(r => r.json())
-      ));
-      const failed = results.filter(r => r.status === 'error');
-      setExecResult(
-        failed.length
-          ? { status: 'error', message: `${failed.length} leg(s) failed to place` }
-          : { status: 'ok', message: `${legs.length} leg(s) placed — ${results[0]?.mode || 'simulated'}` }
-      );
+      const { status, data } = await _sendBasket(false);
+      if (status === 428) {
+        // Live safety gate — show preview and wait for user confirmation
+        setConfirmState({ preview: data.preview || [] });
+        return;
+      }
+      const ok = data.status === 'filled' || data.status === 'ok';
+      setExecResult({
+        status: ok ? 'ok' : 'error',
+        message: ok
+          ? `${data.fills?.length || legs.length} leg(s) placed — ${data.mode || 'simulated'}`
+          : `${data.failed?.length || 0} leg(s) failed`,
+      });
+    } catch (err) {
+      setExecResult({ status: 'error', message: err.message });
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  const confirmLiveExecution = async () => {
+    setExecuting(true);
+    setConfirmState(null);
+    try {
+      const { data } = await _sendBasket(true);
+      const ok = data.status === 'filled' || data.status === 'ok';
+      setExecResult({
+        status: ok ? 'ok' : 'error',
+        message: ok
+          ? `${data.fills?.length || legs.length} leg(s) LIVE — ${data.mode}`
+          : `${data.failed?.length || 0} leg(s) failed (${data.fills?.length || 0} rolled back)`,
+      });
     } catch (err) {
       setExecResult({ status: 'error', message: err.message });
     } finally {
@@ -281,6 +311,31 @@ const ClickTrade = () => {
               </div>
             )}
           </div>
+
+          {confirmState && (
+            <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 text-sm">
+              <p className="font-black text-amber-800 mb-2">⚠ LIVE ORDER CONFIRMATION</p>
+              <p className="text-amber-700 text-xs mb-3">These REAL orders will be placed immediately and cannot be undone:</p>
+              <div className="space-y-1 mb-4">
+                {confirmState.preview.map((p, i) => (
+                  <div key={i} className="font-mono text-xs text-amber-900 bg-amber-100 rounded px-2 py-1">
+                    {p.side} {p.tradingSymbol} × {p.quantity} ({p.orderType})
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={confirmLiveExecution}
+                  disabled={executing}
+                  className="bg-rose-600 hover:bg-rose-500 text-white px-4 py-2 rounded-xl text-xs font-black transition-all disabled:opacity-50"
+                >Confirm Live Orders</button>
+                <button
+                  onClick={() => setConfirmState(null)}
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-xl text-xs font-black transition-all"
+                >Cancel</button>
+              </div>
+            </div>
+          )}
 
           {execResult && (
             <div className={`rounded-2xl border p-4 text-sm font-bold ${

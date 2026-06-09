@@ -1,16 +1,87 @@
-# React + Vite
+# NeoTrade
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+NeoTrade is a React + Node trading workstation for Indian markets. Live Kotak broker/API execution is intentionally deferred for now; the current focus is paper trading, signals, ClickTrade analysis, historical data ingestion, and a future-ready backtest engine.
 
-Currently, two official plugins are available:
+## Current Modules
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Execution terminal with watchlists, charts, market depth, positions, and order history.
+- TradingView and Chartink webhook receivers.
+- Strategy token management.
+- Paper trading portfolio engine.
+- Algo condition builder and paper algo engine.
+- AI condition parser through Anthropic.
+- ClickTrade option strategy builder with payoff graph, Greeks, and scenario analysis.
+- Backtester with simulated pricing fallback and DuckDB historical-data support.
+- Angel One historical index-candle ingestion scaffolding.
 
-## React Compiler
+## Deferred
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Live Kotak broker execution for signal/algo strategies.
+- Production-grade Kotak streaming integration.
+- Real multi-leg live basket execution.
 
-## Expanding the ESLint configuration
+## Project Structure
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```text
+service/
+  backend/   Express API, WebSocket feed, paper engine, historical DB
+  frontend/  React/Vite trading UI
+  data/      DuckDB historical database
+```
+
+## Backend Setup
+
+```powershell
+cd service/backend
+npm install
+Copy-Item .env.example .env
+npm run dev
+```
+
+The backend runs on `http://localhost:5000` and exposes WebSocket updates on `ws://localhost:5000`.
+
+For normal local development without broker credentials, the backend starts a mock market feed and paper-mode features remain usable.
+
+## Frontend Setup
+
+```powershell
+cd service/frontend
+npm install
+Copy-Item .env.example .env.local
+npm run dev
+```
+
+The frontend runs on `http://localhost:5173`.
+
+## Tests
+
+Backend:
+
+```powershell
+cd service/backend
+npm.cmd test -- --runInBand
+```
+
+Frontend:
+
+```powershell
+cd service/frontend
+npm.cmd test
+```
+
+In restricted filesystem sandboxes, Vitest/esbuild may fail while traversing protected Windows parent directories. The frontend tests pass outside that sandbox restriction.
+
+## Historical Data
+
+Historical backfill uses Angel One SmartAPI credentials and stores candles in DuckDB.
+
+```powershell
+cd service/backend
+node scripts/backfill.js --symbol NIFTY --from 2024-01-01 --to 2024-01-31
+```
+
+Current historical ingestion is index-spot focused. Option contract master lookup and option candle backfill are next-phase work.
+
+## Implementation Roadmap
+
+See [IMPLEMENTATION_TODO.md](IMPLEMENTATION_TODO.md) for the full one-by-one backlog.

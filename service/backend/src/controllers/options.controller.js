@@ -1,8 +1,10 @@
 'use strict';
 
-const axios = require('axios');
+const axios   = require('axios');
 const session = require('../brokers/kotak/session');
-const config = require('../brokers/kotak/config');
+const config  = require('../brokers/kotak/config');
+const { enrichRow } = require('../services/greeks.service');
+const expiryCalc    = require('../services/expiryCalc');
 
 function _kotakHeaders() {
   const { accessToken } = session.getSession();
@@ -58,6 +60,15 @@ function _stubChain(symbol, expiry) {
   return { symbol, expiry: expiry || 'nearest', spot, strikes };
 }
 
+function _enrichChain(chain, expiryDate) {
+  if (!chain || !chain.spot || !chain.strikes) return chain;
+  const spot    = chain.spot;
+  const expiryD = expiryDate ? new Date(expiryDate + 'T00:00:00Z') : null;
+  const T       = expiryD ? expiryCalc.getDTE(Date.now(), expiryD) : 7 / 365;
+  chain.strikes = chain.strikes.map(row => enrichRow(row, spot, T));
+  return chain;
+}
+
 const optionsController = {
 
   // GET /api/options/chain?symbol=NIFTY&expiry=2025-06-26
@@ -71,13 +82,13 @@ const optionsController = {
           timeout: 8000,
         });
         const parsed = _parseKotakChain(kotakRes.data, symbol, expiry);
-        if (parsed) return res.json(parsed);
+        if (parsed) return res.json(_enrichChain(parsed, expiry));
         console.warn('[options] Kotak chain response unparseable — using stub');
       }
     } catch (err) {
       console.warn('[options] Kotak chain fetch failed:', err.message);
     }
-    res.json(_stubChain(symbol, expiry));
+    res.json(_enrichChain(_stubChain(symbol, expiry), expiry));
   },
 
   // GET /api/options/expiries?symbol=NIFTY

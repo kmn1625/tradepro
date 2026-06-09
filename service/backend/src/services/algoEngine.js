@@ -1,7 +1,10 @@
 'use strict';
 
 const marketDataService = require('./marketData.service');
-const { evaluate } = require('./conditionEvaluator');
+const { evaluate }      = require('./conditionEvaluator');
+const store             = require('./persistenceStore.service');
+
+const NS = 'algo_state';
 
 // Map short names to marketData.service symbol keys
 const SYMBOL_MAP = {
@@ -10,12 +13,42 @@ const SYMBOL_MAP = {
   FINNIFTY:  'FINNIFTY (Index)',
 };
 
-// In-memory algo execution engine. Resets on restart — paper trading only.
-// Receives ticks from kotakFeed, evaluates condition trees, fires virtual entries/exits.
+// Algo execution engine. State persists across restarts via file-backed store.
 class AlgoEngine {
   constructor() {
-    // Map<token, AlgoState>
     this._strategies = new Map();
+    this._loadFromDisk();
+  }
+
+  _loadFromDisk() {
+    try {
+      const saved = store.getAll(NS);
+      for (const [token, state] of Object.entries(saved)) {
+        // Restore state but clear logs (stale after restart)
+        this._strategies.set(token, { ...state, logs: [] });
+      }
+      if (this._strategies.size > 0)
+        console.log(`[AlgoEngine] restored ${this._strategies.size} algo(s) from disk`);
+    } catch (err) {
+      console.warn('[AlgoEngine] disk restore failed:', err.message);
+    }
+  }
+
+  _persist() {
+    const snapshot = {};
+    for (const [token, state] of this._strategies) {
+      snapshot[token] = {
+        condition: state.condition,
+        symbol:    state.symbol,
+        interval:  state.interval,
+        isActive:  state.isActive,
+        position:  state.position,
+        trades:    state.trades,
+        pnl:       state.pnl,
+        logs:      state.logs.slice(-20),
+      };
+    }
+    store.setAll(NS, snapshot);
   }
 
   // Attach a condition to a strategy token (or create entry for new token)
@@ -26,22 +59,24 @@ class AlgoEngine {
       symbol:   normalizedSym,
       interval,
       isActive: true,
-      position: null,   // { entryPrice, entryTime }
+      position: null,
       trades:   0,
       pnl:      0,
       logs:     [],
     });
+    this._persist();
     console.log(`[AlgoEngine] attached ${token.slice(0, 8)} on ${normalizedSym} (${interval})`);
   }
 
   detach(token) {
     this._strategies.delete(token);
+    this._persist();
     console.log(`[AlgoEngine] detached ${token.slice(0, 8)}`);
   }
 
   setActive(token, isActive) {
     const s = this._strategies.get(token);
-    if (s) s.isActive = Boolean(isActive);
+    if (s) { s.isActive = Boolean(isActive); this._persist(); }
   }
 
   isAttached(token) {
@@ -107,6 +142,7 @@ class AlgoEngine {
             if (state.logs.length > 50) state.logs.shift();
             console.log(`[AlgoEngine] ${token.slice(0, 8)} ${msg}`);
             state.position = null;
+            this._persist();
           }
         }
       } catch (err) {

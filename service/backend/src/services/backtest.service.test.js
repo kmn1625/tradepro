@@ -3,21 +3,21 @@
 const backtestService = require('./backtest.service');
 
 describe('BacktestService.run()', () => {
-  test('throws not-implemented error', async () => {
-    await expect(backtestService.run({})).rejects.toThrow('Backtest engine not yet implemented');
+  test('requires a date range', async () => {
+    await expect(backtestService.run({})).rejects.toThrow('dateRange.from and dateRange.to required');
   });
 });
 
 describe('BacktestService.computeMetrics()', () => {
   test('empty array returns zeroed metrics', () => {
     expect(backtestService.computeMetrics([])).toEqual({
-      totalPnl: 0, winRate: 0, maxDrawdown: 0, sharpe: 0, tradeCount: 0,
+      totalPnl: 0, winRate: 0, maxDrawdown: 0, sharpe: 0, profitFactor: 0, tradeCount: 0,
     });
   });
 
   test('null returns zeroed metrics', () => {
     expect(backtestService.computeMetrics(null)).toEqual({
-      totalPnl: 0, winRate: 0, maxDrawdown: 0, sharpe: 0, tradeCount: 0,
+      totalPnl: 0, winRate: 0, maxDrawdown: 0, sharpe: 0, profitFactor: 0, tradeCount: 0,
     });
   });
 

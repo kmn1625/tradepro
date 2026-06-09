@@ -10,6 +10,7 @@ export default defineConfig({
     reporters: ["default", "tdd-guard-vitest"],
   },
   server: {
+    host: '0.0.0.0',
     port: 5173,
     proxy: {
       "/api": {

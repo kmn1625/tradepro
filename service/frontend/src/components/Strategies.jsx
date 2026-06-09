@@ -223,7 +223,7 @@ export default function Strategies() {
                           ? 'bg-amber-100 text-amber-700'
                           : 'bg-emerald-100 text-emerald-700'
                       }`}>
-                        {(s.mode || 'paper').toUpperCase()}
+                        {s.mode === 'live' ? 'LIVE DISABLED' : (s.mode || 'paper').toUpperCase()}
                       </span>
                     </td>
                     <td className="px-8 py-5 font-mono text-sm text-slate-600">

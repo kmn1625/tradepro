@@ -1,20 +1,49 @@
 'use strict';
+const axios = require('axios');
 const { getFirestore, admin } = require('../config/firebase.admin');
 const { VirtualPortfolio } = require('../services/virtualPortfolio.service');
 const marketDataService = require('../services/marketData.service');
+const kotakSession = require('../brokers/kotak/session');
+const kotakConfig  = require('../brokers/kotak/config');
+const store        = require('../services/persistenceStore.service');
+
+const PORTFOLIO_NS = 'paper_portfolios';
+const SIGNAL_LOG_NS = 'signal_log_local';
 
 // ---------------------------------------------------------------------------
-// In-memory portfolio registry: strategyId -> VirtualPortfolio instance.
-// Each active strategy config gets its own isolated portfolio.
-// Resets on server restart — acceptable for forward-test (paper) mode.
+// Persistent portfolio registry: strategyId -> VirtualPortfolio instance.
+// State survives server restarts via file-backed store (M12).
 // ---------------------------------------------------------------------------
 const _portfolios = new Map();
 
 function _getOrCreatePortfolio(strategyId, initialCapital = 1000000) {
   if (!_portfolios.has(strategyId)) {
-    _portfolios.set(strategyId, new VirtualPortfolio(initialCapital));
+    const saved = store.get(PORTFOLIO_NS, strategyId);
+    const vp = new VirtualPortfolio(saved?.initialCapital || initialCapital);
+    if (saved) {
+      try {
+        if (saved.availableCapital != null) vp.availableCapital  = saved.availableCapital;
+        if (saved.positions)                vp._positions        = new Map(Object.entries(saved.positions));
+        if (saved.trades)                   vp._trades           = saved.trades;
+        if (saved.tradeCounter != null)     vp._tradeCounter     = saved.tradeCounter;
+      } catch { /* restore failed — start fresh */ }
+    }
+    _portfolios.set(strategyId, vp);
   }
   return _portfolios.get(strategyId);
+}
+
+function _persistPortfolio(strategyId) {
+  const vp = _portfolios.get(strategyId);
+  if (!vp) return;
+  store.set(PORTFOLIO_NS, strategyId, {
+    initialCapital:   vp.initialCapital,
+    availableCapital: vp.availableCapital,
+    positions:        Object.fromEntries(vp._positions || new Map()),
+    trades:           vp._trades || [],
+    tradeCounter:     vp._tradeCounter || 0,
+    savedAt:          new Date().toISOString(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +80,9 @@ async function _lookupStrategy(token) {
  * @returns {Promise<string|null>} auto-generated doc ID or null
  */
 async function _logSignal(logEntry) {
+  // Always write to local file log (M13)
+  store.append(SIGNAL_LOG_NS, logEntry);
+
   const db = getFirestore();
   if (!db) return null;
   try {
@@ -132,28 +164,52 @@ async function receiveTradingView(req, res) {
       strategy = { id: token, strategyName: token, mode: 'paper', initialCapital: 1000000, slippage: 0.001 };
     }
 
-    // --- Live mode stub (Phase 1 — no real orders allowed) ---
+    // Current market price — informational for live, fill price for paper.
+    const ltp = marketDataService.lastPrice[symbol] || 0;
+
+    // --- Live mode: real Kotak equity order ---
     if (strategy.mode === 'live') {
-      await _logSignal({
-        source: 'tradingview',
-        token,
-        strategyId: strategy.id,
-        symbol,
-        action,
-        quantity,
-        status: 'rejected',
-        fillPrice: null,
-        errorMessage: 'Live trading not yet implemented',
-        mode: 'live',
-      });
-      return res.status(501).json({
-        error: 'Live trading not yet implemented',
-        mode: 'live',
-      });
+      if (!kotakSession.isAuthenticated()) {
+        await _logSignal({ source: 'tradingview', token, strategyId: strategy.id, symbol, action,
+          quantity, status: 'rejected', fillPrice: null,
+          errorMessage: 'Kotak not authenticated', mode: 'live' });
+        return res.status(503).json({
+          error: 'Kotak session not active — authenticate via /api/auth/kotak first',
+          mode: 'live',
+        });
+      }
+
+      const { accessToken } = kotakSession.getSession();
+      const exchangeSeg = strategy.exchange_segment || 'nse_cm';
+      const product     = strategy.product || 'MIS';
+      const txnType     = (action === 'SELL' || action === 'EXIT') ? 'S' : 'B';
+
+      try {
+        const kotakRes = await axios.post(
+          `${kotakConfig.BASE_URL}/rest/neo/v1/order`,
+          { trading_symbol: symbol, exchange_segment: exchangeSeg,
+            transaction_type: txnType, order_type: 'MKT',
+            quantity: String(quantity), product, validity: 'DAY' },
+          { headers: { Authorization: `Bearer ${accessToken}`,
+              consumerKey: process.env.KOTAK_CONSUMER_KEY,
+              'Content-Type': 'application/json' }, timeout: 8000 }
+        );
+        const orderId = kotakRes.data?.data?.orderId || kotakRes.data?.orderId || null;
+        await _logSignal({ source: 'tradingview', token, strategyId: strategy.id, symbol, action,
+          quantity, status: 'filled', fillPrice: ltp || null, errorMessage: null, mode: 'live' });
+        return res.status(200).json({
+          status: 'ok', source: 'tradingview', strategy: strategy.strategyName,
+          symbol, action, quantity, mode: 'live', orderId,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (err) {
+        await _logSignal({ source: 'tradingview', token, strategyId: strategy.id, symbol, action,
+          quantity, status: 'error', fillPrice: null, errorMessage: err.message, mode: 'live' });
+        return res.status(502).json({ error: 'Kotak order failed: ' + err.message, mode: 'live' });
+      }
     }
 
     // --- Paper mode execution ---
-    const ltp = marketDataService.lastPrice[symbol] || 0;
     if (ltp <= 0) {
       return res.status(503).json({
         error: 'No live price available for ' + symbol + '. Is feed connected?',
@@ -170,6 +226,7 @@ async function receiveTradingView(req, res) {
       } else if (action === 'SELL' || action === 'EXIT') {
         fillResult = portfolio.sell(symbol, quantity, ltp, strategy.slippage || 0.001);
       }
+      _persistPortfolio(strategy.id);
     } catch (err) {
       await _logSignal({
         source: 'tradingview',
